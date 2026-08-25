@@ -14,6 +14,7 @@
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
+#include <wlr/types/wlr_layer_shell_v1.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_pointer.h>
@@ -44,6 +45,9 @@ struct tinywl_server {
 	struct wl_listener new_xdg_toplevel;
 	struct wl_listener new_xdg_popup;
 	struct wl_list toplevels;
+
+	struct wlr_layer_shell_v1 *layer_shell;
+	struct wl_listener new_layer_surface;
 
 	struct wlr_cursor *cursor;
 	struct wlr_xcursor_manager *cursor_mgr;
@@ -860,6 +864,73 @@ static void xdg_popup_destroy(struct wl_listener *listener, void *data) {
 	free(popup);
 }
 
+struct tinywl_layer_surface {
+	struct tinywl_server *server;
+	struct wlr_layer_surface_v1 *layer_surface;
+	struct wlr_scene_layer_surface_v1 *scene_layer;
+	struct wl_listener commit;
+	struct wl_listener destroy;
+};
+
+static void layer_surface_configure_output(struct tinywl_server *server,
+		struct tinywl_layer_surface *ls) {
+	struct wlr_output *output = ls->layer_surface->output;
+	if (output == NULL) {
+		struct wlr_output_layout_output *lo;
+		wl_list_for_each(lo, &server->output_layout->outputs, link) {
+			output = lo->output;
+			break;
+		}
+	}
+	if (output == NULL) {
+		return;
+	}
+	if (ls->layer_surface->output == NULL) {
+		ls->layer_surface->output = output;
+	}
+
+	struct wlr_box box;
+	wlr_output_layout_get_box(server->output_layout, output, &box);
+	if (ls->scene_layer != NULL) {
+		struct wlr_box usable = box;
+		wlr_scene_layer_surface_v1_configure(ls->scene_layer, &box, &usable);
+	}
+}
+
+static void layer_surface_commit(struct wl_listener *listener, void *data) {
+	struct tinywl_layer_surface *ls = wl_container_of(listener, ls, commit);
+	(void)data;
+
+	if (ls->layer_surface->initial_commit) {
+		ls->scene_layer = wlr_scene_layer_surface_v1_create(
+			&ls->server->scene->tree, ls->layer_surface);
+		layer_surface_configure_output(ls->server, ls);
+	}
+}
+
+static void layer_surface_destroy(struct wl_listener *listener, void *data) {
+	struct tinywl_layer_surface *ls = wl_container_of(listener, ls, destroy);
+	(void)data;
+	wl_list_remove(&ls->commit.link);
+	wl_list_remove(&ls->destroy.link);
+	free(ls);
+}
+
+static void server_new_layer_surface(struct wl_listener *listener, void *data) {
+	struct tinywl_server *server = wl_container_of(listener, server,
+		new_layer_surface);
+	struct wlr_layer_surface_v1 *layer_surface = data;
+
+	struct tinywl_layer_surface *ls = calloc(1, sizeof(*ls));
+	ls->server = server;
+	ls->layer_surface = layer_surface;
+
+	ls->commit.notify = layer_surface_commit;
+	wl_signal_add(&layer_surface->surface->events.commit, &ls->commit);
+	ls->destroy.notify = layer_surface_destroy;
+	wl_signal_add(&layer_surface->events.destroy, &ls->destroy);
+}
+
 static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
 	/* This event is raised when a client creates a new popup. */
 	struct wlr_xdg_popup *xdg_popup = data;
@@ -981,6 +1052,11 @@ int main(int argc, char *argv[]) {
 	wl_signal_add(&server.xdg_shell->events.new_toplevel, &server.new_xdg_toplevel);
 	server.new_xdg_popup.notify = server_new_xdg_popup;
 	wl_signal_add(&server.xdg_shell->events.new_popup, &server.new_xdg_popup);
+
+	server.layer_shell = wlr_layer_shell_v1_create(server.wl_display, 4);
+	server.new_layer_surface.notify = server_new_layer_surface;
+	wl_signal_add(&server.layer_shell->events.new_surface,
+			&server.new_layer_surface);
 
 	/*
 	 * Creates a cursor, which is a wlroots utility for tracking the cursor
