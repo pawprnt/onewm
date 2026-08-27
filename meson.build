@@ -35,77 +35,40 @@ layer_shell_server_hdr = custom_target('layer-shell-server-header',
 
 inc = include_directories('include')
 
+# Single busybox-style binary. `startup` (no arg) runs the compositor; subcommands
+# `boot|panel|desktop|filemanager|wallpapers|themes` run the matching client.
 executable(
   'onewm',
-  'src/compositor/onewm.c',
+  [
+    'src/shared/dispatch.c',
+    'src/shared/config.c',
+    'src/compositor/onewm.c',
+    'src/clients/boot.c',
+    'src/clients/panel.c',
+    'src/clients/desktop.c',
+    'src/clients/selectors.c',
+    'src/clients/filemanager.c',
+  ],
   layer_shell_server_hdr,
-  dependencies: [wlroots_dep, wayland_server_dep, xkbcommon_dep],
+  proto_src,
+  proto_hdr,
+  dependencies: [
+    wlroots_dep, wayland_server_dep, wayland_client_dep,
+    xkbcommon_dep, cairo_dep, pango_dep, fontconfig_dep, zlib_dep,
+  ],
   include_directories: inc,
   c_args: ['-DWLR_USE_UNSTABLE'],
-  install: true,
-)
-
-executable(
-  'onewm-boot',
-  'src/clients/boot.c',
-  proto_src,
-  proto_hdr,
-  dependencies: [wayland_client_dep, cairo_dep, pango_dep, fontconfig_dep],
-  include_directories: inc,
-  install: true,
-)
-
-executable(
-  'onewm-panel',
-  'src/clients/panel.c',
-  proto_src,
-  proto_hdr,
-  dependencies: [wayland_client_dep, cairo_dep, pango_dep, fontconfig_dep],
-  include_directories: inc,
-  install: true,
-)
-
-executable(
-  'onewm-desktop',
-  'src/clients/desktop.c',
-  proto_src,
-  proto_hdr,
-  dependencies: [wayland_client_dep, cairo_dep, pango_dep, fontconfig_dep, zlib_dep],
-  include_directories: inc,
-  install: true,
-)
-
-executable(
-  'onewm-wallpapers',
-  'src/clients/selectors.c',
-  proto_src,
-  proto_hdr,
-  dependencies: [wayland_client_dep, cairo_dep, pango_dep, fontconfig_dep, zlib_dep],
-  include_directories: inc,
-  install: true,
-)
-
-executable(
-  'onewm-themes',
-  'src/clients/selectors.c',
-  proto_src,
-  proto_hdr,
-  dependencies: [wayland_client_dep, cairo_dep, pango_dep, fontconfig_dep, zlib_dep],
-  include_directories: inc,
-  install: true,
-)
-
-executable(
-  'onewm-filemanager',
-  'src/clients/filemanager.c',
-  proto_src,
-  proto_hdr,
-  dependencies: [wayland_client_dep, cairo_dep, pango_dep, fontconfig_dep],
-  include_directories: inc,
+  # client + server protocol objects both define identical interface symbols.
+  link_args: ['-Wl,--allow-multiple-definition'],
   install: true,
 )
 
 install_subdir(
   'data',
+  install_dir: get_option('datadir') / 'onewm',
+)
+
+install_data(
+  'config/onewm.lua',
   install_dir: get_option('datadir') / 'onewm',
 )

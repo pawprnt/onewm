@@ -26,6 +26,12 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
+#include <string.h>
+#include <signal.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include "config.h"
+#include "onewm.h"
 
 /* For brevity's sake, struct members are annotated where they are used. */
 enum tinywl_cursor_mode {
@@ -317,6 +323,131 @@ struct tinywl_keyboard {
 
 static void write_window_list(struct tinywl_server *server);
 
+static struct tinywl_server *g_server = NULL;
+static float g_transparency = 1.0f;
+
+struct onewm_bind {
+	uint32_t mods;
+	xkb_keysym_t sym;
+	char action[256];
+};
+static struct onewm_bind g_binds[64];
+static int g_nbinds = 0;
+
+static void focus_toplevel(struct tinywl_toplevel *toplevel);
+
+static void set_opacity_cb(struct wlr_scene_buffer *buf, int sx, int sy, void *data) {
+	(void)sx; (void)sy;
+	float a = *(const float *)data;
+	wlr_scene_buffer_set_opacity(buf, a);
+}
+
+static void apply_transparency(struct tinywl_server *s) {
+	if (wl_list_empty(&s->toplevels))
+		return;
+	struct tinywl_toplevel *focused =
+		wl_container_of(s->toplevels.next, focused, link);
+	struct tinywl_toplevel *tl;
+	wl_list_for_each(tl, &s->toplevels, link) {
+		float a = (tl == focused) ? 1.0f : g_transparency;
+		wlr_scene_node_for_each_buffer(&tl->scene_tree->node, set_opacity_cb, &a);
+	}
+}
+
+static void run_bind_action(struct tinywl_server *s, const char *action) {
+	if (!action || !*action) return;
+	if (!strncasecmp(action, "exec ", 5)) {
+		const char *cmd = action + 5;
+		pid_t pid = fork();
+		if (pid == 0) {
+			execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+			_exit(127);
+		}
+	} else if (!strcasecmp(action, "kill")) {
+		if (!wl_list_empty(&s->toplevels)) {
+			struct tinywl_toplevel *tl =
+				wl_container_of(s->toplevels.next, tl, link);
+			wlr_xdg_toplevel_send_close(tl->xdg_toplevel);
+		}
+	} else if (!strcasecmp(action, "exit")) {
+		wl_display_terminate(s->wl_display);
+	}
+}
+
+static void load_bind_cb(const char *combo, const char *action, void *ud) {
+	(void)ud;
+	if (g_nbinds >= 64 || !combo || !action) return;
+	char buf[160];
+	snprintf(buf, sizeof(buf), "%s", combo);
+	uint32_t mods = 0;
+	xkb_keysym_t sym = XKB_KEY_NoSymbol;
+	char *save = NULL;
+	char *tok = strtok_r(buf, "+", &save);
+	while (tok) {
+		if (!strcasecmp(tok, "SUPER") || !strcasecmp(tok, "WIN") || !strcasecmp(tok, "LOGO"))
+			mods |= WLR_MODIFIER_LOGO;
+		else if (!strcasecmp(tok, "SHIFT"))
+			mods |= WLR_MODIFIER_SHIFT;
+		else if (!strcasecmp(tok, "CTRL") || !strcasecmp(tok, "CONTROL"))
+			mods |= WLR_MODIFIER_CTRL;
+		else if (!strcasecmp(tok, "ALT") || !strcasecmp(tok, "META"))
+			mods |= WLR_MODIFIER_ALT;
+		else {
+			xkb_keysym_t s = xkb_keysym_from_name(tok, XKB_KEYSYM_CASE_INSENSITIVE);
+			if (s != XKB_KEY_NoSymbol) sym = s;
+		}
+		tok = strtok_r(NULL, "+", &save);
+	}
+	if (sym == XKB_KEY_NoSymbol) return;
+	g_binds[g_nbinds].mods = mods;
+	g_binds[g_nbinds].sym = sym;
+	snprintf(g_binds[g_nbinds].action, sizeof(g_binds[g_nbinds].action), "%s", action);
+	g_nbinds++;
+}
+
+static void load_config_binds(void) {
+	g_nbinds = 0;
+	cfg_foreach("keybind", load_bind_cb, NULL);
+	int t = cfg_get_int("general", "transparency", -1);
+	if (t < 0) {
+		const char *op = cfg_get("windowrule", "opacity");
+		if (op) t = (int)(atof(op) * 100.0f);
+	}
+	if (t >= 20 && t <= 100)
+		g_transparency = (float)t / 100.0f;
+}
+
+static void on_usr1(int sig) {
+	(void)sig;
+	if (!g_server) return;
+	char path[1024];
+	snprintf(path, sizeof(path), "%s/.config/onewm/activate", getenv("HOME") ? getenv("HOME") : "/tmp");
+	FILE *f = fopen(path, "r");
+	if (!f) return;
+	char title[256];
+	if (!fgets(title, sizeof(title), f)) { fclose(f); return; }
+	fclose(f);
+	size_t L = strlen(title);
+	while (L && (title[L-1] == '\n' || title[L-1] == '\r')) title[--L] = 0;
+	if (!L) return;
+	struct tinywl_toplevel *tl;
+	wl_list_for_each(tl, &g_server->toplevels, link) {
+		const char *tt = tl->xdg_toplevel->title;
+		if (tt && strcmp(tt, title) == 0) {
+			focus_toplevel(tl);
+			break;
+		}
+	}
+}
+
+static void spawn_self(const char *sub) {
+	pid_t pid = fork();
+	if (pid == 0) {
+		execl("/proc/self/exe", "onewm", sub, (char *)NULL);
+		_exit(127);
+	}
+}
+
 static void focus_toplevel(struct tinywl_toplevel *toplevel) {
 	/* Note: this function only deals with keyboard focus. */
 	if (toplevel == NULL) {
@@ -360,6 +491,7 @@ static void focus_toplevel(struct tinywl_toplevel *toplevel) {
 	}
 	/* Notify panel taskbar */
 	write_window_list(server);
+	apply_transparency(server);
 }
 
 static void keyboard_handle_modifiers(
@@ -425,6 +557,19 @@ static void keyboard_handle_key(
 
 	bool handled = false;
 	uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr_keyboard);
+	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+		for (int i = 0; i < g_nbinds; i++) {
+			if (g_binds[i].mods == modifiers) {
+				for (int j = 0; j < nsyms; j++) {
+					if (g_binds[i].sym == syms[j]) {
+						run_bind_action(server, g_binds[i].action);
+						handled = true;
+						break;
+					}
+				}
+			}
+		}
+	}
 	if ((modifiers & WLR_MODIFIER_ALT) &&
 			event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		/* If alt is held down and this button was _pressed_, we attempt to
@@ -1198,7 +1343,8 @@ static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
 	wl_signal_add(&xdg_popup->events.destroy, &popup->destroy);
 }
 
-int main(int argc, char *argv[]) {
+int compositor_main(int argc, char *argv[]) {
+	config_load();
 	/* Honor WLR_LOG_LEVEL; default to warning so wlroots' noisy nested-backend
 	   debug spam (e.g. "Signal timeline requires a wait timeline") stays quiet. */
 	const char *llenv = getenv("WLR_LOG_LEVEL");
@@ -1298,6 +1444,9 @@ int main(int argc, char *argv[]) {
 	server.scene_layout = wlr_scene_attach_output_layout(server.scene, server.output_layout);
 
 	load_themes(&server);
+	g_server = &server;
+	load_config_binds();
+	signal(SIGUSR1, on_usr1);
 	{
 		float bc[4];
 		memcpy(bc, server.themes[server.current_theme].background, sizeof(float) * 3);
@@ -1411,6 +1560,11 @@ int main(int argc, char *argv[]) {
 		if (fork() == 0) {
 			execl("/bin/sh", "/bin/sh", "-c", startup_cmd, (void *)NULL);
 		}
+	}
+	/* The WM auto-spawns the desktop and taskbar layer clients. */
+	if (getenv("ONEWM_NO_AUTOSPAWN") == NULL) {
+		spawn_self("desktop");
+		spawn_self("panel");
 	}
 	/* Run the Wayland event loop. This does not return until you exit the
 	 * compositor. Starting the backend rigged up all of the necessary event
