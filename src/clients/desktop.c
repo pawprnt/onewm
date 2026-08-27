@@ -19,10 +19,20 @@
 #include "wlr-layer-shell-unstable-v1-protocol.h"
 
 #define ICON 64
+/* The game lays out desktop icons in an internal coordinate space (icon 32px,
+   ICON_OFFSET (26,6), label at y=36, selection box 80x54) and then upscales 2x
+   for display. We render directly at the on-screen (2x) resolution, so all of
+   those constants are doubled here to stay 1:1 with the game's final look. */
+#define ICON_OFF_X 52   /* 26 * 2 */
+#define ICON_OFF_Y 12   /* 6 * 2  */
+#define LABEL_Y    72    /* 36 * 2 */
+#define SELBOX_W   160   /* 80 * 2 */
+#define SELBOX_H   108   /* (36 + textHeight(12) + 2 + 4) * 2 */
+#define SELBOX_IN  4     /* ClickAreaForIcon offset + inner-shrink, 2 * 2 */
+
 #define MARGIN 28
-#define COL_GAP 120
-#define ROW_STEP 96
-#define LABEL_H 22
+#define COL_GAP 168      /* 84 * 2 */
+#define ROW_STEP 144      /* 72 * 2 */
 
 struct icon {
 	const char *name;
@@ -297,10 +307,11 @@ static void build_selbox(void) {
 	if (ctx.selbox_fill) cairo_surface_destroy(ctx.selbox_fill);
 	ctx.selbox_border = NULL;
 	ctx.selbox_fill = NULL;
-	/* Outer: primary @ ½α — matches FileIcon.ClickAreaForIcon: 80 × (36+12+6)=80×54 */
-	ctx.selbox_border = make_color_box(80, 54, ctx.primary, 0.5);
-	/* Inner: background @ ½α — shrunk by 2px on each side: 76×50 */
-	ctx.selbox_fill   = make_color_box(76, 50, ctx.background, 0.5);
+	/* Outer: primary @ ½α — FileIcon.ClickAreaForIcon 80×54 in game-space, ×2. */
+	ctx.selbox_border = make_color_box(SELBOX_W, SELBOX_H, ctx.primary, 0.5);
+	/* Inner: background @ ½α — shrunk by 2px game-space (4px) on each side. */
+	ctx.selbox_fill   = make_color_box(SELBOX_W - 2 * SELBOX_IN, SELBOX_H - 2 * SELBOX_IN,
+	                                   ctx.background, 0.5);
 }
 
 static void retint(void) {
@@ -399,37 +410,40 @@ static void draw_icon(cairo_t *cr, int i, bool hover) {
 	   with textHeight=12 for single-line labels. */
 	if (hover) {
 		if (ctx.selbox_border) {
-			cairo_set_source_surface(cr, ctx.selbox_border, x + 2, y + 2);
+			cairo_set_source_surface(cr, ctx.selbox_border, x + SELBOX_IN, y + SELBOX_IN);
 			cairo_paint(cr);
 		}
 		if (ctx.selbox_fill) {
-			cairo_set_source_surface(cr, ctx.selbox_fill, x + 4, y + 4);
+			cairo_set_source_surface(cr, ctx.selbox_fill,
+				x + 2 * SELBOX_IN, y + 2 * SELBOX_IN);
 			cairo_paint(cr);
 		}
 	}
 
 	/* Game-style tint: white icon × primary colour, with a 1px background-
-	   coloured drop shadow (mirrors FileIcon.Draw's two MainBlit calls). */
+	   coloured drop shadow (mirrors FileIcon.Draw's two MainBlit calls). The
+	   icon is offset by ICON_OFF (26,6 in game-space, ×2). */
 	if (ic->tint_sh) {
-		cairo_set_source_surface(cr, ic->tint_sh, x + 1, y + 1);
+		cairo_set_source_surface(cr, ic->tint_sh, x + ICON_OFF_X + 1, y + ICON_OFF_Y + 1);
 		cairo_paint(cr);
 	}
 	if (ic->tint) {
-		cairo_set_source_surface(cr, ic->tint, x, y);
+		cairo_set_source_surface(cr, ic->tint, x + ICON_OFF_X, y + ICON_OFF_Y);
 		cairo_paint(cr);
 	}
 
 	/* Caption: paint the pre-rendered label surface (white text + 1px
 	   shadow drawn on an offscreen surface, since solid-source text fails
-	   on the desktop surface in this cairo build). */
+	   on the desktop surface in this cairo build). Centered under the icon
+	   (game centers the label at x offset 42 in game-space → 84 ×2). */
 	{
 		int tw = 0, th = 0;
 		if (ic->label) {
 			tw = cairo_image_surface_get_width(ic->label);
 			th = cairo_image_surface_get_height(ic->label);
 		}
-		int lx = x + (ICON - tw) / 2;
-		int ly = y + ICON + 4;
+		int lx = x + ICON_OFF_X + (ICON / 2) - (tw / 2);
+		int ly = y + LABEL_Y;
 		if (ic->label) {
 			cairo_set_source_surface(cr, ic->label, lx, ly);
 			cairo_paint(cr);
@@ -456,8 +470,8 @@ static void draw_desktop(cairo_t *cr, int W, int H) {
 
 	for (size_t i = 0; i < NICON; i++) {
 		int ix = icons[i].x, iy = icons[i].y;
-		bool hover = ctx.px >= ix && ctx.px <= ix + ICON &&
-		             ctx.py >= iy && ctx.py <= iy + ICON + LABEL_H;
+		bool hover = ctx.px >= ix + SELBOX_IN && ctx.px <= ix + SELBOX_IN + SELBOX_W &&
+		             ctx.py >= iy + SELBOX_IN && ctx.py <= iy + SELBOX_IN + SELBOX_H;
 		draw_icon(cr, i, hover);
 	}
 }
@@ -507,7 +521,8 @@ static void launch(int i) {
 static int icon_at(int x, int y) {
 	for (size_t i = 0; i < NICON; i++) {
 		int ix = icons[i].x, iy = icons[i].y;
-		if (x >= ix && x <= ix + ICON && y >= iy && y <= iy + ICON + LABEL_H)
+		if (x >= ix + SELBOX_IN && x <= ix + SELBOX_IN + SELBOX_W &&
+		    y >= iy + SELBOX_IN && y <= iy + SELBOX_IN + SELBOX_H)
 			return (int)i;
 	}
 	return -1;
