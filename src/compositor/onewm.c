@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <getopt.h>
 #include <stdbool.h>
+#include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
@@ -31,6 +32,15 @@ enum tinywl_cursor_mode {
 	TINYWL_CURSOR_PASSTHROUGH,
 	TINYWL_CURSOR_MOVE,
 	TINYWL_CURSOR_RESIZE,
+};
+
+struct twm_theme {
+	char id[32];
+	char display[32];
+	float primary[3];
+	float primary_variant[3];
+	float background[3];
+	bool rainbow;
 };
 
 struct tinywl_server {
@@ -72,7 +82,198 @@ struct tinywl_server {
 	struct wlr_output_layout *output_layout;
 	struct wl_list outputs;
 	struct wl_listener new_output;
+
+	struct twm_theme themes[64];
+	int theme_count;
+	int current_theme;
+	float rainbow_hue;
+	struct wlr_scene_rect *bg;
+	struct wlr_scene_tree *layers[4];
+	struct wlr_scene_tree *windows_tree;
 };
+
+/* ---- WME theme engine (Phase A) ----
+ * Chrome is drawn white/grayscale and multiplied by the theme color at render
+ * time. The boot client (onewm-boot) is a separate process and stays purple. */
+
+static char *find_data(const char *rel) {
+	static char path[4096];
+	const char *env = getenv("ONEWM_DATA_DIR");
+	if (env) {
+		snprintf(path, sizeof(path), "%s/%s", env, rel);
+		if (access(path, R_OK) == 0) return path;
+	}
+	snprintf(path, sizeof(path), "data/%s", rel);
+	if (access(path, R_OK) == 0) return path;
+	snprintf(path, sizeof(path), "themes/%s", rel);
+	if (access(path, R_OK) == 0) return path;
+	snprintf(path, sizeof(path), "../themes/%s", rel);
+	if (access(path, R_OK) == 0) return path;
+	snprintf(path, sizeof(path), "/usr/share/onewm/%s", rel);
+	if (access(path, R_OK) == 0) return path;
+	return NULL;
+}
+
+static char *read_file(const char *path, size_t *len) {
+	FILE *f = fopen(path, "rb");
+	if (!f) return NULL;
+	fseek(f, 0, SEEK_END);
+	long sz = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	char *buf = malloc(sz + 1);
+	if (!buf) { fclose(f); return NULL; }
+	if (fread(buf, 1, sz, f) != (size_t)sz) { fclose(f); free(buf); return NULL; }
+	buf[sz] = '\0';
+	fclose(f);
+	if (len) *len = sz;
+	return buf;
+}
+
+static void rgb_to_hsl(float r, float g, float b, float *h, float *s, float *l) {
+	float mx = fmaxf(r, fmaxf(g, b)), mn = fminf(r, fminf(g, b));
+	float d = mx - mn;
+	*l = (mx + mn) / 2.0f;
+	*s = 0.0f;
+	*h = 0.0f;
+	if (d < 1e-6f) return;
+	*s = (*l > 0.5f) ? d / (2.0f - mx - mn) : d / (mx + mn);
+	if (mx == r) *h = (g - b) / d + (g < b ? 6.0f : 0.0f);
+	else if (mx == g) *h = (b - r) / d + 2.0f;
+	else *h = (r - g) / d + 4.0f;
+	*h /= 6.0f;
+}
+
+static float hue_clamp(float x) {
+	while (x < 0.0f) x += 1.0f;
+	while (x > 1.0f) x -= 1.0f;
+	return x;
+}
+
+static void hsl_to_rgb(float h, float s, float l, float *r, float *g, float *b) {
+	if (s < 1e-6f) { *r = *g = *b = l; return; }
+	float q = (l < 0.5f) ? l * (1.0f + s) : l + s - l * s;
+	float p = 2.0f * l - q;
+	float t[3] = { h + 1.0f / 3.0f, h, h - 1.0f / 3.0f };
+	for (int i = 0; i < 3; i++) {
+		t[i] = hue_clamp(t[i]);
+		float c;
+		if (t[i] < 1.0f / 6.0f) c = p + (q - p) * 6.0f * t[i];
+		else if (t[i] < 0.5f) c = q;
+		else if (t[i] < 2.0f / 3.0f) c = p + (q - p) * (2.0f / 3.0f - t[i]) * 6.0f;
+		else c = p;
+		if (i == 0) *r = c; else if (i == 1) *g = c; else *b = c;
+	}
+}
+
+static void apply_hue(const float in[3], float angle, float out[3]) {
+	float h, s, l;
+	rgb_to_hsl(in[0], in[1], in[2], &h, &s, &l);
+	h = hue_clamp(h + angle / (2.0f * 3.14159265f));
+	hsl_to_rgb(h, s, l, &out[0], &out[1], &out[2]);
+}
+
+static int parse_rgb(const char *p, float *out) {
+	char *r = strstr(p, "\"r\"");
+	char *g = strstr(p, "\"g\"");
+	char *b = strstr(p, "\"b\"");
+	if (!r || !g || !b) return -1;
+	int ri, gi, bi;
+	if (sscanf(r, "\"r\":%d", &ri) != 1) return -1;
+	if (sscanf(g, "\"g\":%d", &gi) != 1) return -1;
+	if (sscanf(b, "\"b\":%d", &bi) != 1) return -1;
+	out[0] = ri / 255.0f; out[1] = gi / 255.0f; out[2] = bi / 255.0f;
+	return 0;
+}
+
+static const char *match_brace_close(const char *open) {
+	int d = 0;
+	for (const char *p = open; *p; p++) {
+		if (*p == '{') d++;
+		else if (*p == '}') { d--; if (d == 0) return p; }
+	}
+	return NULL;
+}
+
+static void load_themes(struct tinywl_server *server) {
+	server->theme_count = 0;
+	server->current_theme = 0;
+	server->rainbow_hue = 0;
+	const char *path = find_data("themes_metadata.json");
+	char *buf = path ? read_file(path, NULL) : NULL;
+	if (buf) {
+		const char *arr = strstr(buf, "\"themes\"");
+		const char *p = arr ? strchr(arr, '[') : NULL;
+		if (p) {
+			p++;
+			while (*p && server->theme_count < 64) {
+				const char *obj = strchr(p, '{');
+				if (!obj) break;
+				const char *objend = match_brace_close(obj);
+				if (!objend) break;
+				struct twm_theme *th = &server->themes[server->theme_count];
+
+				const char *k = strstr(obj, "\"id\"");
+				if (k && k < objend) {
+					const char *q = strchr(k + 4, '"');
+					if (q) {
+						q++;
+						const char *qe = strchr(q, '"');
+						int len = qe ? (int)(qe - q) : 0;
+						if (len > 31) len = 31;
+						memcpy(th->id, q, len);
+						th->id[len] = '\0';
+					}
+				}
+				k = strstr(obj, "\"primary\"");
+				if (k && k < objend) { const char *pb = strchr(k, '{'); if (pb) parse_rgb(pb, th->primary); }
+				k = strstr(obj, "\"primaryVariant\"");
+				if (k && k < objend) { const char *vb = strchr(k, '{'); if (vb) parse_rgb(vb, th->primary_variant); }
+				k = strstr(obj, "\"background\"");
+				if (k && k < objend) { const char *bb = strchr(k, '{'); if (bb) parse_rgb(bb, th->background); }
+				th->rainbow = (strcmp(th->id, "rainbow") == 0);
+				memcpy(th->display, th->id, sizeof(th->display));
+				server->theme_count++;
+				p = objend + 1;
+			}
+		}
+		free(buf);
+	}
+	if (server->theme_count == 0) {
+		struct twm_theme *th = &server->themes[0];
+		th->primary[0] = 150 / 255.0f; th->primary[1] = 100 / 255.0f; th->primary[2] = 255 / 255.0f;
+		th->primary_variant[0] = 100 / 255.0f; th->primary_variant[1] = 66 / 255.0f; th->primary_variant[2] = 165 / 255.0f;
+		th->background[0] = th->background[1] = th->background[2] = 0.0f;
+		strcpy(th->id, "purple");
+		strcpy(th->display, "Purple");
+		th->rainbow = false;
+		server->theme_count = 1;
+	}
+	const char *want = getenv("ONEWM_THEME");
+	if (want) {
+		for (int i = 0; i < server->theme_count; i++)
+			if (strcmp(server->themes[i].id, want) == 0) { server->current_theme = i; break; }
+	}
+	if (getenv("ONEWM_THEME_DEBUG")) {
+		struct twm_theme *t = &server->themes[server->current_theme];
+		wlr_log(WLR_INFO, "onewm theme: %s primary=#%02x%02x%02x variant=#%02x%02x%02x rainbow=%d",
+			t->id,
+			(int)(t->primary[0] * 255), (int)(t->primary[1] * 255), (int)(t->primary[2] * 255),
+			(int)(t->primary_variant[0] * 255), (int)(t->primary_variant[1] * 255), (int)(t->primary_variant[2] * 255),
+			t->rainbow);
+	}
+}
+
+static void theme_primary(struct tinywl_server *s, float out[3]) {
+	struct twm_theme *t = &s->themes[s->current_theme];
+	memcpy(out, t->primary, sizeof(float) * 3);
+	if (t->rainbow) apply_hue(out, s->rainbow_hue, out);
+}
+
+static void theme_primary_variant(struct tinywl_server *s, float out[3]) {
+	struct twm_theme *t = &s->themes[s->current_theme];
+	memcpy(out, t->primary_variant, sizeof(float) * 3);
+	if (t->rainbow) apply_hue(out, s->rainbow_hue, out);
+}
 
 struct tinywl_output {
 	struct wl_list link;
@@ -113,6 +314,8 @@ struct tinywl_keyboard {
 	struct wl_listener key;
 	struct wl_listener destroy;
 };
+
+static void write_window_list(struct tinywl_server *server);
 
 static void focus_toplevel(struct tinywl_toplevel *toplevel) {
 	/* Note: this function only deals with keyboard focus. */
@@ -155,6 +358,8 @@ static void focus_toplevel(struct tinywl_toplevel *toplevel) {
 		wlr_seat_keyboard_notify_enter(seat, surface,
 			keyboard->keycodes, keyboard->num_keycodes, &keyboard->modifiers);
 	}
+	/* Notify panel taskbar */
+	write_window_list(server);
 }
 
 static void keyboard_handle_modifiers(
@@ -386,6 +591,9 @@ static struct tinywl_toplevel *desktop_toplevel_at(
 	while (tree != NULL && tree->node.data == NULL) {
 		tree = tree->node.parent;
 	}
+	if (!tree) {
+		return NULL;
+	}
 	return tree->node.data;
 }
 
@@ -580,6 +788,13 @@ static void output_frame(struct wl_listener *listener, void *data) {
 	struct tinywl_output *output = wl_container_of(listener, output, frame);
 	struct wlr_scene *scene = output->server->scene;
 
+	if (output->server->theme_count > 0 &&
+	    output->server->themes[output->server->current_theme].rainbow) {
+		output->server->rainbow_hue += 0.02f;
+		if (output->server->rainbow_hue > 6.2831853f)
+			output->server->rainbow_hue -= 6.2831853f;
+	}
+
 	struct wlr_scene_output *scene_output = wlr_scene_get_scene_output(
 		scene, output->wlr_output);
 
@@ -674,6 +889,27 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	wlr_scene_output_layout_add_output(server->scene_layout, l_output, scene_output);
 }
 
+/* Write the list of open XDG toplevels to ~/.config/onewm/windows so the
+   panel taskbar can display them.  Format: one line per window, tab-separated
+   "title\tactive\n".  active = '1' for the focused window, '0' otherwise. */
+static void write_window_list(struct tinywl_server *server) {
+	char path[4096];
+	const char *home = getenv("HOME");
+	if (!home) home = "/tmp";
+	snprintf(path, sizeof path, "%s/.config/onewm/windows", home);
+	FILE *f = fopen(path, "w");
+	if (!f) return;
+	struct wlr_surface *focused = server->seat->keyboard_state.focused_surface;
+	struct tinywl_toplevel *tl;
+	wl_list_for_each(tl, &server->toplevels, link) {
+		const char *title = tl->xdg_toplevel->title;
+		if (!title || !*title) title = "Untitled";
+		int active = (focused == tl->xdg_toplevel->base->surface) ? 1 : 0;
+		fprintf(f, "%s\t%d\n", title, active);
+	}
+	fclose(f);
+}
+
 static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
 	/* Called when the surface is mapped, or ready to display on-screen. */
 	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, map);
@@ -681,6 +917,7 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
 	wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
 
 	focus_toplevel(toplevel);
+	write_window_list(toplevel->server);
 }
 
 static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
@@ -693,6 +930,7 @@ static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
 	}
 
 	wl_list_remove(&toplevel->link);
+	write_window_list(toplevel->server);
 }
 
 static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
@@ -814,7 +1052,7 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
 	toplevel->server = server;
 	toplevel->xdg_toplevel = xdg_toplevel;
 	toplevel->scene_tree =
-		wlr_scene_xdg_surface_create(&toplevel->server->scene->tree, xdg_toplevel->base);
+		wlr_scene_xdg_surface_create(toplevel->server->windows_tree, xdg_toplevel->base);
 	toplevel->scene_tree->node.data = toplevel;
 	xdg_toplevel->base->data = toplevel->scene_tree;
 
@@ -902,8 +1140,13 @@ static void layer_surface_commit(struct wl_listener *listener, void *data) {
 	(void)data;
 
 	if (ls->layer_surface->initial_commit) {
+		enum zwlr_layer_shell_v1_layer layer = ls->layer_surface->current.layer;
+		if (layer < ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND)
+			layer = ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND;
+		if (layer > ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY)
+			layer = ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY;
 		ls->scene_layer = wlr_scene_layer_surface_v1_create(
-			&ls->server->scene->tree, ls->layer_surface);
+			ls->server->layers[layer], ls->layer_surface);
 		layer_surface_configure_output(ls->server, ls);
 	}
 }
@@ -956,7 +1199,19 @@ static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
 }
 
 int main(int argc, char *argv[]) {
-	wlr_log_init(WLR_DEBUG, NULL);
+	/* Honor WLR_LOG_LEVEL; default to warning so wlroots' noisy nested-backend
+	   debug spam (e.g. "Signal timeline requires a wait timeline") stays quiet. */
+	const char *llenv = getenv("WLR_LOG_LEVEL");
+	if (!llenv)
+		llenv = "warning";
+	enum wlr_log_importance lvl = WLR_INFO;
+	if (strcmp(llenv, "error") == 0) lvl = WLR_ERROR;
+	else if (strcmp(llenv, "warning") == 0 || strcmp(llenv, "info") == 0) lvl = WLR_INFO;
+	else if (strcmp(llenv, "debug") == 0) lvl = WLR_DEBUG;
+	else if (strcmp(llenv, "silent") == 0) lvl = WLR_SILENT;
+	if (!getenv("WLR_LOG_LEVEL"))
+		setenv("WLR_LOG_LEVEL", "warning", 1);
+	wlr_log_init(lvl, NULL);
 	char *startup_cmd = NULL;
 
 	int c;
@@ -1041,6 +1296,26 @@ int main(int argc, char *argv[]) {
 	 */
 	server.scene = wlr_scene_create();
 	server.scene_layout = wlr_scene_attach_output_layout(server.scene, server.output_layout);
+
+	load_themes(&server);
+	{
+		float bc[4];
+		memcpy(bc, server.themes[server.current_theme].background, sizeof(float) * 3);
+		bc[3] = 1.0f;
+		server.bg = wlr_scene_rect_create(&server.scene->tree, 16384, 16384, bc);
+		if (server.bg)
+			wlr_scene_node_set_position(&server.bg->node, -8192, -8192);
+	}
+
+	server.layers[ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND] =
+		wlr_scene_tree_create(&server.scene->tree);
+	server.layers[ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM] =
+		wlr_scene_tree_create(&server.scene->tree);
+	server.windows_tree = wlr_scene_tree_create(&server.scene->tree);
+	server.layers[ZWLR_LAYER_SHELL_V1_LAYER_TOP] =
+		wlr_scene_tree_create(&server.scene->tree);
+	server.layers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY] =
+		wlr_scene_tree_create(&server.scene->tree);
 
 	/* Set up xdg-shell version 3. The xdg-shell is a Wayland protocol which is
 	 * used for application windows. For more detail on shells, refer to

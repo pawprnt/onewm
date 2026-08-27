@@ -1,0 +1,22 @@
+pkgbase = onewm
+	pkgdesc = wlroots Wayland compositor and World Machine boot cutscene (Oneshot WME recreation)
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/pawprnt/onewm
+	arch = x86_64
+	arch = aarch64
+	license = GPL3
+	makedepends = meson
+	makedepends = ninja
+	makedepends = git
+	depends = wayland
+	depends = wayland-protocols
+	depends = cairo
+	depends = pango
+	depends = fontconfig
+	depends = libxkbcommon
+	depends = wlroots0.20
+	source = git+https://github.com/pawprnt/onewm.git#tag=v0.1.0
+	sha256sums = SKIP
+
+pkgname = onewm

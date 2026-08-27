@@ -1,5 +1,3 @@
-
 All sounds loaded. @WAIT 0.2 
 
-Loading system textures:
-@SCANTEXTURES
+Loading system textures:@SCANTEXTURES

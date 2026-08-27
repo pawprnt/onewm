@@ -15,6 +15,7 @@ xkbcommon_dep = dependency('xkbcommon')
 cairo_dep = dependency('cairo')
 pango_dep = dependency('pangocairo')
 fontconfig_dep = dependency('fontconfig')
+zlib_dep = dependency('zlib')
 
 wayland_scanner = find_program('wayland-scanner')
 layer_shell_xml = files('protocols/wlr-layer-shell-unstable-v1.xml')
@@ -32,11 +33,11 @@ layer_shell_server_hdr = custom_target('layer-shell-server-header',
   output: 'wlr-layer-shell-unstable-v1-protocol.h',
   command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'])
 
-inc = include_directories('src')
+inc = include_directories('include')
 
 executable(
   'onewm',
-  'src/onewm.c',
+  'src/compositor/onewm.c',
   layer_shell_server_hdr,
   dependencies: [wlroots_dep, wayland_server_dep, xkbcommon_dep],
   include_directories: inc,
@@ -46,7 +47,57 @@ executable(
 
 executable(
   'onewm-boot',
-  'src/boot.c',
+  'src/clients/boot.c',
+  proto_src,
+  proto_hdr,
+  dependencies: [wayland_client_dep, cairo_dep, pango_dep, fontconfig_dep],
+  include_directories: inc,
+  install: true,
+)
+
+executable(
+  'onewm-panel',
+  'src/clients/panel.c',
+  proto_src,
+  proto_hdr,
+  dependencies: [wayland_client_dep, cairo_dep, pango_dep, fontconfig_dep],
+  include_directories: inc,
+  install: true,
+)
+
+executable(
+  'onewm-desktop',
+  'src/clients/desktop.c',
+  proto_src,
+  proto_hdr,
+  dependencies: [wayland_client_dep, cairo_dep, pango_dep, fontconfig_dep, zlib_dep],
+  include_directories: inc,
+  install: true,
+)
+
+executable(
+  'onewm-wallpapers',
+  'src/clients/selectors.c',
+  proto_src,
+  proto_hdr,
+  dependencies: [wayland_client_dep, cairo_dep, pango_dep, fontconfig_dep, zlib_dep],
+  include_directories: inc,
+  install: true,
+)
+
+executable(
+  'onewm-themes',
+  'src/clients/selectors.c',
+  proto_src,
+  proto_hdr,
+  dependencies: [wayland_client_dep, cairo_dep, pango_dep, fontconfig_dep, zlib_dep],
+  include_directories: inc,
+  install: true,
+)
+
+executable(
+  'onewm-filemanager',
+  'src/clients/filemanager.c',
   proto_src,
   proto_hdr,
   dependencies: [wayland_client_dep, cairo_dep, pango_dep, fontconfig_dep],
