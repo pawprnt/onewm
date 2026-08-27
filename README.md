@@ -1,49 +1,85 @@
 # OneWm
 
 A wlroots-based Wayland compositor and boot experience that recreates the
-**Oneshot: World Machine Edition** desktop as a real Linux session.
+**Oneshot: World Machine Edition** desktop as a real Linux session, rendered
+1:1 from the game's own drawing code.
 
 > Note: the binary and package name is `onewm` (all lowercase) for Wayland /
 > compositor and package-manager compatibility. "OneWm" is the project and
 > brand name.
 
-## Components
+## Single binary
 
-- `onewm` — the wlroots Wayland compositor.
-- `onewm-boot` — the World Machine boot cutscene client. It renders the BIOS /
-  POST screen (the small TWM logo, version string, and scrolling console text)
-  as a full-screen layer-shell surface, with the startup sound effect.
+Everything ships as **one executable**. `onewm` with no arguments starts the
+compositor and automatically spawns the desktop and taskbar. Subcommands run
+the individual layer-shell clients (used internally and for previewing):
+
+| Command                | Purpose                                                     |
+|------------------------|-------------------------------------------------------------|
+| `onewm`                | Compositor + auto-spawned desktop & taskbar (the full WM). |
+| `onewm boot`           | World Machine boot / POST cutscene (full-screen).           |
+| `onewm panel`          | Taskbar (window list, clock, click-to-focus).              |
+| `onewm desktop`        | Desktop icons + wallpaper.                                  |
+| `onewm filemanager`    | The World Machine "file browser" window.                    |
+| `onewm wallpapers`     | Wallpaper selector.                                         |
+| `onewm themes`         | Theme selector.                                             |
+
+Set `ONEWM_NO_AUTOSPAWN=1` to start only the compositor.
 
 ## Building
 
 ```bash
-git clone https://github.com/pawprnt/onewm.git
-cd onewm
 meson setup build
 meson compile -C build
-```
-
-## Installing
-
-```bash
 sudo meson install -C build
 ```
 
-This installs `onewm`, `onewm-boot`, and the data files to
-`/usr/share/onewm`.
+Installs `onewm` and the data files to `/usr/share/onewm`.
+
+## Configuration (`onewm.lua`)
+
+Config uses a Lua-ish, Hyprland-style syntax (comments with `--` or `#`).
+The example at `config/onewm.lua` is installed to `/usr/share/onewm/onewm.lua`
+and is also read from `$XDG_CONFIG_HOME/onewm/onewm.lua` or
+`$ONEWM_CONFIG`.
+
+```lua
+general = {
+  theme        = "purple",  -- purple|blue|teal|green|yellow|red|pink|orange|white|rainbow
+  wallpaper    = "catwalks",
+  icon_dir     = "/path/to/icons",
+  panel_height = 30,
+  transparency = 100,       -- 20..100 (% opaque) for unfocused windows
+  data_dir     = "/usr/share/onewm",
+}
+
+keybind("SUPER+ENTER", "exec alacritty")
+keybind("SUPER+Q",     "kill")
+keybind("SUPER+E",     "exec onewm filemanager")
+keybind("SUPER+ESCAPE","exit")
+
+windowrule("opacity", "0.95")
+```
+
+- **Keybind controls** — `SUPER`/`WIN`/`LOGO`, `SHIFT`, `CTRL`, `ALT` modifiers;
+  actions: `exec <shell>`, `kill` (close focused), `exit` (quit WM).
+- **Window rules** — currently `opacity` (session-wide, mirrors
+  `general.transparency`); reserved hooks for future per-window rules.
+- **Transparency** — unfocused toplevels are dimmed to the configured opacity.
+
+Theme colors, panel chrome, file-manager grid, selector thumbnails and desktop
+icon selection boxes all follow the constants extracted from the game's
+decompiled source (see `docs/design-spec.md`).
 
 ## Usage
 
-Run `onewm` to start the compositor. The boot cutscene can also be launched
-independently against an existing Wayland session (e.g. for previewing / theming):
-
 ```bash
-onewm-boot            # run the cutscene on the current Wayland session
-scripts/test.sh boot  # convenience wrapper (also has a `combo` mode)
+onewm                 # start the full WM on a tty / DRM or nested backend
+scripts/test.sh combo # headless/nested preview harness
 ```
 
-Required assets (logo, sound, fonts) live under `/usr/share/onewm`. See
-`ASSETS_LICENSE.md` for ownership and attribution.
+Required assets (logo, sound, fonts, wallpapers, themes) live under
+`/usr/share/onewm`. See `ASSETS_LICENSE.md` for ownership and attribution.
 
 ## License
 
