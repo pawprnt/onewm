@@ -42,8 +42,8 @@ static struct icon icons[] = {
 	{ "Firefox",    "apps/firefox-3.0.png",                   "firefox",        0, 0, NULL },
 	{ "Alacritty",  "apps/Alacritty.png",                     "alacritty",      0, 0, NULL },
 	{ "Files",      "places/folder-visiting.png",             "xdg-open /",     0, 0, NULL },
-	{ "Wallpapers", "apps/preferences-desktop-wallpaper.png", "onewm-wallpapers", 0, 0, NULL },
-	{ "Themes",     "apps/preferences-desktop-theme.png",     "onewm-themes",   0, 0, NULL },
+	{ "Wallpapers", "apps/preferences-desktop-wallpaper.png", "onewm wallpapers", 0, 0, NULL },
+	{ "Themes",     "apps/preferences-desktop-theme.png",     "onewm themes",   0, 0, NULL },
 };
 #define NICON (sizeof(icons) / sizeof(icons[0]))
 
@@ -487,8 +487,8 @@ static void launch(int i) {
 	const char *cmd = icons[i].cmd;
 	pid_t pid = fork();
 	if (pid == 0) {
-		/* Prepend our own binary directory to PATH so selectors
-		   (onewm-wallpapers, onewm-themes) can be found. */
+		/* Prepend our own binary directory to PATH so the selectors
+		   (onewm wallpapers / onewm themes) can be found. */
 		char self[4096];
 		ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
 		if (n > 0) {
