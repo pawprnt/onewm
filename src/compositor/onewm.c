@@ -120,6 +120,36 @@ static char *find_data(const char *rel) {
 	return NULL;
 }
 
+/* Resolve a usable ONEWM_DATA_DIR so auto-spawned clients (boot, panel,
+   desktop, ...) inherit it. config.c only sets it from general.data_dir, so
+   when that is unset we fall back to the repo's data/ dir or the install
+   location, derived from the compositor executable's own path. */
+static void resolve_data_dir(void) {
+	if (getenv("ONEWM_DATA_DIR"))
+		return;
+	char exe[4096];
+	char dir[4096] = "";
+	ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+	if (n > 0) {
+		exe[n] = '\0';
+		char *slash = strrchr(exe, '/');
+		if (slash) {
+			*slash = '\0';
+			snprintf(dir, sizeof dir, "%s/../data", exe);
+		}
+	}
+	const char *cands[] = { "data", dir, "/usr/share/onewm", NULL };
+	for (int i = 0; cands[i]; i++) {
+		if (!cands[i][0])
+			continue;
+		struct stat st;
+		if (stat(cands[i], &st) == 0 && S_ISDIR(st.st_mode)) {
+			setenv("ONEWM_DATA_DIR", cands[i], 1);
+			return;
+		}
+	}
+}
+
 static char *read_file(const char *path, size_t *len) {
 	FILE *f = fopen(path, "rb");
 	if (!f) return NULL;
@@ -237,7 +267,7 @@ static void load_themes(struct tinywl_server *server) {
 				k = strstr(obj, "\"background\"");
 				if (k && k < objend) { const char *bb = strchr(k, '{'); if (bb) parse_rgb(bb, th->background); }
 				th->rainbow = (strcmp(th->id, "rainbow") == 0);
-				memcpy(th->display, th->id, sizeof(th->display));
+				snprintf(th->display, sizeof th->display, "%s", th->id);
 				server->theme_count++;
 				p = objend + 1;
 			}
@@ -249,8 +279,8 @@ static void load_themes(struct tinywl_server *server) {
 		th->primary[0] = 150 / 255.0f; th->primary[1] = 100 / 255.0f; th->primary[2] = 255 / 255.0f;
 		th->primary_variant[0] = 100 / 255.0f; th->primary_variant[1] = 66 / 255.0f; th->primary_variant[2] = 165 / 255.0f;
 		th->background[0] = th->background[1] = th->background[2] = 0.0f;
-		strcpy(th->id, "purple");
-		strcpy(th->display, "Purple");
+		snprintf(th->id, sizeof th->id, "purple");
+		snprintf(th->display, sizeof th->display, "Purple");
 		th->rainbow = false;
 		server->theme_count = 1;
 	}
@@ -440,12 +470,24 @@ static void on_usr1(int sig) {
 	}
 }
 
+static pid_t panel_pid = 0;
+
+static void ensure_config_dir(void) {
+	const char *home = getenv("HOME");
+	if (!home) home = "/tmp";
+	char path[4096];
+	snprintf(path, sizeof(path), "%s/.config/onewm", home);
+	mkdir(path, 0700);
+}
+
 static void spawn_self(const char *sub) {
 	pid_t pid = fork();
 	if (pid == 0) {
 		execl("/proc/self/exe", "onewm", sub, (char *)NULL);
 		_exit(127);
 	}
+	if (pid > 0 && strcmp(sub, "panel") == 0)
+		panel_pid = pid;
 }
 
 static void focus_toplevel(struct tinywl_toplevel *toplevel) {
@@ -1053,6 +1095,8 @@ static void write_window_list(struct tinywl_server *server) {
 		fprintf(f, "%s\t%d\n", title, active);
 	}
 	fclose(f);
+	/* Live-update the panel taskbar when windows open/close/focus. */
+	if (panel_pid > 0) kill(panel_pid, SIGUSR1);
 }
 
 static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
@@ -1563,10 +1607,14 @@ int compositor_main(int argc, char *argv[]) {
 	}
 	/* The WM auto-spawns the desktop and taskbar layer clients, and applies
 	   the active theme to native toolkits (GTK/KDE/Qt). */
+	resolve_data_dir();
+	ensure_config_dir();
 	if (getenv("ONEWM_NO_AUTOSPAWN") == NULL) {
+		spawn_self("boot");
 		spawn_self("desktop");
 		spawn_self("panel");
-		spawn_self("theme-apply");
+		if (getenv("ONEWM_NO_THEME_APPLY") == NULL)
+			spawn_self("theme-apply");
 	}
 	/* Run the Wayland event loop. This does not return until you exit the
 	 * compositor. Starting the backend rigged up all of the necessary event

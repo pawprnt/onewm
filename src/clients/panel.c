@@ -109,9 +109,9 @@ static void parse_rgb(const char *b, float *out) {
 	const char *rj = strstr(b, "\"r\"");
 	const char *gj = strstr(b, "\"g\"");
 	const char *bj = strstr(b, "\"b\"");
-	if (rj) sscanf(strchr(rj, ':'), ": %d", &r);
-	if (gj) sscanf(strchr(gj, ':'), ": %d", &g);
-	if (bj) sscanf(strchr(bj, ':'), ": %d", &bv);
+	if (rj) { const char *c = strchr(rj, ':'); if (c) sscanf(c, ": %d", &r); }
+	if (gj) { const char *c = strchr(gj, ':'); if (c) sscanf(c, ": %d", &g); }
+	if (bj) { const char *c = strchr(bj, ':'); if (c) sscanf(c, ": %d", &bv); }
 	if (r >= 0) out[0] = r / 255.0f;
 	if (g >= 0) out[1] = g / 255.0f;
 	if (bv >= 0) out[2] = bv / 255.0f;

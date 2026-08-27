@@ -8,8 +8,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "assets.h"
+
 int main(int argc, char **argv) {
 	config_load();
+	asset_bootstrap();
 
 	const char *sub = (argc > 1) ? argv[1] : NULL;
 	setenv("ONEWM_SUBCMD", sub ? sub : "compositor", 1);

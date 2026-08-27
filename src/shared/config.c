@@ -254,6 +254,7 @@ void config_load(void) {
 	push_env("general", "icon_dir", "ONEWM_ICON_DIR");
 	push_env("general", "panel_height", "ONEWM_PANEL_HEIGHT");
 	push_env("general", "data_dir", "ONEWM_DATA_DIR");
+	push_env("general", "wallpaper_dir", "ONEWM_WALLPAPER_DIR");
 	const char *wp = cfg_get("general", "wallpaper");
 	if (wp && *wp) {
 		if (wp[0] == '/')

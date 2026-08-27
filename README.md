@@ -10,31 +10,46 @@ A wlroots-based Wayland compositor and boot experience that recreates the
 
 ## Single binary
 
-Everything ships as **one executable**. `onewm` with no arguments starts the
-compositor and automatically spawns the desktop and taskbar. Subcommands run
-the individual layer-shell clients (used internally and for previewing):
+Everything ships as **one executable** — including all assets (logo, sound,
+fonts, wallpapers, themes). `onewm` with no arguments starts the compositor
+and automatically spawns the desktop and taskbar. Subcommands run the
+individual layer-shell clients (used internally and for previewing):
 
-| Command                | Purpose                                                     |
-|------------------------|-------------------------------------------------------------|
-| `onewm`                | Compositor + auto-spawned desktop & taskbar (the full WM). |
-| `onewm boot`           | World Machine boot / POST cutscene (full-screen).           |
-| `onewm panel`          | Taskbar (window list, clock, click-to-focus).              |
-| `onewm desktop`        | Desktop icons + wallpaper.                                  |
-| `onewm filemanager`    | The World Machine "file browser" window.                    |
-| `onewm wallpapers`     | Wallpaper selector.                                         |
-| `onewm themes`         | Theme selector.                                             |
+| Command             | Purpose                                                     |
+|---------------------|-------------------------------------------------------------|
+| `onewm`             | Compositor + auto-spawned desktop & taskbar (the full WM).  |
+| `onewm boot`        | World Machine boot / POST cutscene (full-screen).            |
+| `onewm panel`       | Taskbar (window list, clock, click-to-focus).               |
+| `onewm desktop`     | Desktop icons + wallpaper.                                  |
+| `onewm filemanager` | The World Machine "file browser" window.                    |
+| `onewm wallpapers`  | Wallpaper selector.                                         |
+| `onewm themes`      | Theme selector.                                             |
 
 Set `ONEWM_NO_AUTOSPAWN=1` to start only the compositor.
+
+Assets are embedded into the binary at build time (see
+`scripts/build/embed_assets.py`). At startup `asset_bootstrap()` extracts them
+to a cache dir under `$XDG_RUNTIME_DIR/onewm-assets-$UID` (or `/tmp`) when
+`ONEWM_DATA_DIR` is not already set. You can still point at external assets
+with `ONEWM_DATA_DIR`, and add your own wallpapers via `general.wallpaper_dir`
+(see below). Set `ONEWM_NO_EMBED=1` to disable extraction and require an
+external data dir.
 
 ## Building
 
 ```bash
+./build.sh                 # install build deps (pacman/apt/dnf/zypper/xbps/apk) + meson + ninja
+# or manually:
 meson setup build
 meson compile -C build
 sudo meson install -C build
 ```
 
-Installs `onewm` and the data files to `/usr/share/onewm`.
+`build.sh` detects your package manager, installs/upgrades the build
+dependencies (wlroots-0.20, wayland, xkbcommon, cairo, pango, fontconfig,
+zlib, meson, ninja, gcc, python3, binutils), then configures and compiles.
+Installing puts `onewm` and the data files on the system. The asset embedder
+(`scripts/build/embed_assets.py`) is invoked automatically by the build.
 
 ## Configuration (`onewm.lua`)
 
@@ -51,6 +66,7 @@ general = {
   panel_height = 30,
   transparency = 100,       -- 20..100 (% opaque) for unfocused windows
   data_dir     = "/usr/share/onewm",
+  wallpaper_dir = "/path/to/my/wallpapers",  -- optional external wallpapers
 }
 
 keybind("SUPER+ENTER", "exec alacritty")
@@ -66,6 +82,8 @@ windowrule("opacity", "0.95")
 - **Window rules** — currently `opacity` (session-wide, mirrors
   `general.transparency`); reserved hooks for future per-window rules.
 - **Transparency** — unfocused toplevels are dimmed to the configured opacity.
+- **External wallpapers** — `general.wallpaper_dir` is exposed to clients as
+  `ONEWM_WALLPAPER_DIR`; any PNGs there are listed alongside the embedded ones.
 
 ## Toolkit theming (GTK / KDE / Qt)
 
@@ -88,19 +106,44 @@ Files written (under `$HOME`):
 All colors come from `themes/themes_metadata.json` — the same source the WM
 chrome uses. See `docs/THEMING.md`.
 
+> **Safety:** `onewm theme-apply` writes a `<file>.bak` of any existing config
+> (e.g. `~/.config/kdeglobals`) *before* overwriting it, so your previous
+> settings are always preserved.
+
 Theme colors, panel chrome, file-manager grid, selector thumbnails and desktop
 icon selection boxes all follow the constants extracted from the game's
 decompiled source (see `docs/design-spec.md`).
 
+## Scripts
+
+| Script                          | Purpose                                                  |
+|---------------------------------|----------------------------------------------------------|
+| `build.sh`                      | Install build deps + meson/ninja (root-level helper).    |
+| `scripts/build/embed_assets.py` | Pack `data/` + themes into the binary at build time.     |
+| `scripts/test-launch.sh`        | Build (optional) and launch onewm **nested** in the current session. |
+
+`scripts/test-launch.sh` auto-detects whether the host is a **Wayland**
+(`WLR_BACKENDS=wayland`) or **X11** (`WLR_BACKENDS=x11`) session and selects
+the matching wlroots backend:
+
+```bash
+scripts/test-launch.sh            # build + launch nested (skips GTK/KDE theming)
+scripts/test-launch.sh --no-build # launch the existing build
+scripts/test-launch.sh --theme    # also apply toolkit theming
+```
+
+Common flags: `--no-replace` (don't kill a previous nested instance),
+`--workspace N` (jump to workspace N first on Hyprland), `--log [FILE]`.
+
 ## Usage
 
 ```bash
-onewm                 # start the full WM on a tty / DRM or nested backend
-scripts/test.sh combo # headless/nested preview harness
+onewm                      # start the full WM on a tty / DRM backend
+scripts/test-launch.sh     # quick nested preview in your current session
 ```
 
-Required assets (logo, sound, fonts, wallpapers, themes) live under
-`/usr/share/onewm`. See `ASSETS_LICENSE.md` for ownership and attribution.
+Game assets bundled in `data/` are **not** covered by the GPL; see
+`ASSETS_LICENSE.md` for ownership and attribution.
 
 ## License
 

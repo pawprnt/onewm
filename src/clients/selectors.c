@@ -146,6 +146,16 @@ static void write_line_to_config(const char *v) {
 
 static char *find_data(const char *rel) {
 	static char path[4096];
+
+	if (strncmp(rel, "wallpapers/", 10) == 0) {
+		const char *wd = getenv("ONEWM_WALLPAPER_DIR");
+		if (wd) {
+			snprintf(path, sizeof(path), "%s/%s", wd, rel + 10);
+			if (access(path, R_OK) == 0)
+				return path;
+		}
+	}
+
 	const char *env = getenv("ONEWM_DATA_DIR");
 	if (env) {
 		snprintf(path, sizeof(path), "%s/%s", env, rel);
@@ -165,13 +175,17 @@ static char *wp_names[128];
 static int wp_count = 0;
 
 static void collect_wallpapers(void) {
+	char dirs[8][4096];
+	int n = 0;
 	const char *base = getenv("ONEWM_DATA_DIR");
-	for (int d = 0; d < 2 && wp_count < 128; d++) {
-		char path[4096];
-		if (d == 0 && base) snprintf(path, sizeof path, "%s/wallpapers", base);
-		else if (d == 0) snprintf(path, sizeof path, "data/wallpapers");
-		else snprintf(path, sizeof path, "/usr/share/onewm/wallpapers");
-		DIR *dir = opendir(path);
+	if (base) { snprintf(dirs[n], sizeof dirs[n], "%s/wallpapers", base); n++; }
+	snprintf(dirs[n], sizeof dirs[n], "data/wallpapers"); n++;
+	snprintf(dirs[n], sizeof dirs[n], "/usr/share/onewm/wallpapers"); n++;
+	const char *wd = getenv("ONEWM_WALLPAPER_DIR");
+	if (wd) { snprintf(dirs[n], sizeof dirs[n], "%s", wd); n++; }
+
+	for (int d = 0; d < n && wp_count < 128; d++) {
+		DIR *dir = opendir(dirs[d]);
 		if (!dir) continue;
 		struct dirent *de;
 		while ((de = readdir(dir)) && wp_count < 128) {
@@ -179,11 +193,11 @@ static void collect_wallpapers(void) {
 			if (L < 4) continue;
 			if (strcmp(de->d_name + L - 4, ".png") != 0) continue;
 			char full[4096];
-			snprintf(full, sizeof full, "%s/%s", path, de->d_name);
+			snprintf(full, sizeof full, "%s/%s", dirs[d], de->d_name);
 			wp_paths[wp_count] = strdup(full);
-			char *n = strdup(de->d_name);
-			if (L > 4 && strcmp(n + L - 4, ".png") == 0) n[L - 4] = '\0';
-			wp_names[wp_count] = n;
+			char *nm = strdup(de->d_name);
+			if (L > 4 && strcmp(nm + L - 4, ".png") == 0) nm[L - 4] = '\0';
+			wp_names[wp_count] = nm;
 			wp_count++;
 		}
 		closedir(dir);

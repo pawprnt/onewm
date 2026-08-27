@@ -498,8 +498,10 @@ static void draw_frame(cairo_t *cr) {
     double us = ctx.height > 0 ? ctx.height / BOOT_DH : 1.0;
     cairo_scale(cr, us, us);
 
-    cairo_set_source_rgb(cr, 0, 0, 0);
-    cairo_paint(cr);
+    if (scene.phase != 1) {
+        cairo_set_source_rgb(cr, 0, 0, 0);
+        cairo_paint(cr);
+    }
 
     if (scene.phase == 1) {
         double t = scene.now - scene.title_start;
@@ -518,6 +520,20 @@ static void draw_frame(cairo_t *cr) {
             alpha = 0.0;                                  /* dither reveal out */
         if (alpha < 0) alpha = 0;
         if (alpha > 1) alpha = 1;
+
+        /* The screen stays black while the logo reveals IN (and during the hold),
+           like the game's title card. Once it begins revealing OUT, the surface
+           goes transparent so the live desktop renders behind it. */
+        int revealing_desktop = (t >= tin + BOOT_FADE_IN + BOOT_TITLE_HOLD);
+        cairo_save(cr);
+        if (revealing_desktop) {
+            cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+            cairo_paint(cr);
+        } else {
+            cairo_set_source_rgb(cr, 0, 0, 0);
+            cairo_paint(cr);
+        }
+        cairo_restore(cr);
 
         /* The logo reveals via an ordered-Bayer DITHER (DitherShader +
            transitions/BayerDither8x8) whose threshold sweeps BOTTOM -> TOP:
@@ -559,8 +575,6 @@ static void draw_frame(cairo_t *cr) {
 
             cairo_save(cr);
             cairo_identity_matrix(cr);
-            cairo_set_source_rgb(cr, 0, 0, 0);
-            cairo_paint(cr);
 
             /* Render the cover-fit logo onto a temp surface, then mask it. */
             cairo_surface_t *tmp = cairo_image_surface_create(

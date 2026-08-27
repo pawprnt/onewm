@@ -35,6 +35,33 @@ layer_shell_server_hdr = custom_target('layer-shell-server-header',
 
 inc = include_directories('include')
 
+# --- Embedded assets: bake data/ + themes/themes_metadata.json into the binary
+# as a single objcopy'd blob so the WM is self-contained (no external data dir
+# required at runtime). asset_bootstrap() extracts it to a cache dir at startup.
+python = find_program('python3')
+asset_data = run_command('find',
+  meson.project_source_root() / 'data',
+  meson.project_source_root() / 'themes',
+  '-type', 'f', check: true).stdout().strip().split('\n')
+asset_data_files = files(asset_data)
+
+asset_bin = custom_target('embed_assets_bin',
+  output: 'assets.bin',
+  depend_files: asset_data_files,
+  command: [python, files('scripts/build/embed_assets.py'),
+            meson.project_source_root() / 'data',
+            meson.project_source_root() / 'themes',
+            '@OUTPUT@'],
+  build_by_default: true)
+
+asset_obj = custom_target('embed_assets_obj',
+  output: 'assets.o',
+  input: asset_bin,
+  command: ['objcopy', '-I', 'binary', '-O', 'elf64-x86-64', '-B', 'i386:x86-64',
+            '--rename-section', '.data=.rodata,alloc,load,readonly,contents',
+            '@INPUT@', '@OUTPUT@'],
+  build_by_default: true)
+
 # Single busybox-style binary. `startup` (no arg) runs the compositor; subcommands
 # `boot|panel|desktop|filemanager|wallpapers|themes` run the matching client.
 executable(
@@ -42,6 +69,8 @@ executable(
   [
     'src/shared/dispatch.c',
     'src/shared/config.c',
+    'src/shared/assets.c',
+    asset_obj,
     'src/compositor/onewm.c',
     'src/clients/boot.c',
     'src/clients/panel.c',

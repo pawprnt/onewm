@@ -791,9 +791,13 @@ static void open_entry(int idx) {
 		snprintf(new_path, sizeof new_path, "%s/%s", ctx.cwd, e->name);
 		navigate_to(new_path);
 	} else {
-		char cmd[4096];
-		snprintf(cmd, sizeof cmd, "xdg-open '%s/%s' 2>/dev/null &", ctx.cwd, e->name);
-		system(cmd);
+		char full[8192];
+		snprintf(full, sizeof full, "%s/%s", ctx.cwd, e->name);
+		pid_t pid = fork();
+		if (pid == 0) {
+			execlp("xdg-open", "xdg-open", full, (char *)NULL);
+			_exit(127);
+		}
 	}
 }
 
@@ -803,9 +807,11 @@ static void delete_entry(const char *name) {
 	struct stat st;
 	if (lstat(path, &st) != 0) return;
 	if (S_ISDIR(st.st_mode)) {
-		char cmd[4096];
-		snprintf(cmd, sizeof cmd, "rm -rf '%s' 2>/dev/null", path);
-		system(cmd);
+		pid_t pid = fork();
+		if (pid == 0) {
+			execlp("rm", "rm", "-rf", path, (char *)NULL);
+			_exit(127);
+		}
 	} else {
 		unlink(path);
 	}
@@ -869,9 +875,12 @@ static void handle_click(double px, double py) {
 			double crx = ctx.crumbs[i].x;
 			if (px >= crx && px <= crx + ctx.crumbs[i].w && py >= by+2 && py <= by+18) {
 				char path[4096] = "/";
-				for (int j = 0; j <= i; j++) {
-					strcat(path, ctx.crumbs[j].name);
-					strcat(path, "/");
+				for (int j = 0; j <= i && j < 64; j++) {
+					int rc = snprintf(path + strlen(path),
+						sizeof(path) - strlen(path), "%s/",
+						ctx.crumbs[j].name);
+					if (rc < 0 || (size_t)rc >= sizeof(path) - strlen(path))
+						break;
 				}
 				navigate_to(path);
 				return;

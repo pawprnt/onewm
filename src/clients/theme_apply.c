@@ -49,7 +49,10 @@ static void parse_rgb(const char *block, const char *key, int *r, int *g, int *b
 	buf[seglen] = '\0';
 #define GET(fld, dst) do { \
 		const char *p = strstr(buf, "\"" fld "\""); \
-		if (p) { int v = 0; sscanf(strchr(p, ':'), ":%d", &v); *(dst) = v; } \
+		if (p) { \
+			const char *c = strchr(p, ':'); \
+			if (c) { int v = 0; sscanf(c, ":%d", &v); *(dst) = v; } \
+		} \
 	} while (0)
 	GET("r", r); GET("g", g); GET("b", b);
 #undef GET
@@ -91,6 +94,17 @@ static char *load_theme(const char *id, int *pr, int *pg, int *pb,
 static int clamp255(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 
 static void write_file(const char *path, const char *content) {
+	/* Safety: back up any existing file (regular file OR symlink) before
+	   replacing it, so a previous config or a system theme behind a symlink
+	   is never destroyed. rename(2) on a symlink moves the symlink entry
+	   itself (leaving its target untouched), so e.g. a gtk.css symlink into
+	   /usr/share/themes is preserved as <path>.bak instead of being clobbered. */
+	struct stat st;
+	if (lstat(path, &st) == 0) {
+		char bak[4096];
+		snprintf(bak, sizeof bak, "%s.bak", path);
+		rename(path, bak);
+	}
 	FILE *f = fopen(path, "w");
 	if (!f) return;
 	fputs(content, f);
@@ -210,6 +224,8 @@ static void apply_kvantum(const char *home, const char *id, int pr, int pg, int 
 
 int theme_apply_main(int argc, char **argv) {
 	(void)argc; (void)argv;
+	if (getenv("ONEWM_NO_THEME_APPLY"))
+		return 0;
 	const char *home = getenv("HOME");
 	if (!home) home = "/tmp";
 

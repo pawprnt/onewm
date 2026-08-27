@@ -51,7 +51,7 @@ static struct icon icons[] = {
 	{ "OneBoot",    "apps/oneshot.png",                       "true",            0, 0, NULL },
 	{ "Firefox",    "apps/firefox-3.0.png",                   "firefox",        0, 0, NULL },
 	{ "Alacritty",  "apps/Alacritty.png",                     "alacritty",      0, 0, NULL },
-	{ "Files",      "places/folder-visiting.png",             "xdg-open /",     0, 0, NULL },
+	{ "Files",      "places/folder-visiting.png",             "onewm filemanager", 0, 0, NULL },
 	{ "Wallpapers", "apps/preferences-desktop-wallpaper.png", "onewm wallpapers", 0, 0, NULL },
 	{ "Themes",     "apps/preferences-desktop-theme.png",     "onewm themes",   0, 0, NULL },
 };
@@ -108,6 +108,18 @@ static void read_line(const char *path, char *buf, size_t n) {
 
 static char *find_data(const char *rel) {
 	static char path[4096];
+
+	/* Allow an external wallpaper directory (general.wallpaper_dir) to supply
+	   additional/default wallpapers, taking precedence over embedded ones. */
+	if (strncmp(rel, "wallpapers/", 10) == 0) {
+		const char *wd = getenv("ONEWM_WALLPAPER_DIR");
+		if (wd) {
+			snprintf(path, sizeof(path), "%s/%s", wd, rel + 10);
+			if (access(path, R_OK) == 0)
+				return path;
+		}
+	}
+
 	const char *env = getenv("ONEWM_DATA_DIR");
 	if (env) {
 		snprintf(path, sizeof(path), "%s/%s", env, rel);
