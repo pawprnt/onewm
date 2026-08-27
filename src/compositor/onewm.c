@@ -1561,10 +1561,12 @@ int compositor_main(int argc, char *argv[]) {
 			execl("/bin/sh", "/bin/sh", "-c", startup_cmd, (void *)NULL);
 		}
 	}
-	/* The WM auto-spawns the desktop and taskbar layer clients. */
+	/* The WM auto-spawns the desktop and taskbar layer clients, and applies
+	   the active theme to native toolkits (GTK/KDE/Qt). */
 	if (getenv("ONEWM_NO_AUTOSPAWN") == NULL) {
 		spawn_self("desktop");
 		spawn_self("panel");
+		spawn_self("theme-apply");
 	}
 	/* Run the Wayland event loop. This does not return until you exit the
 	 * compositor. Starting the backend rigged up all of the necessary event

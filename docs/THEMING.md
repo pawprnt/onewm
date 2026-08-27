@@ -6,9 +6,11 @@ document outlines how to extend that single source of truth to **native
 toolkit applications** (GTK3/4 and Qt/KDE) so third-party windows match the
 World Machine palette instead of falling back to Adwaita/Breeze.
 
-Status: **not implemented this iteration** — the `onewm` theme engine,
-transparency, keybinds and window rules are the shipped scope. This is the
-planned approach for the next pass.
+Status: **implemented**. `onewm theme-apply` derives GTK3/4, KDE and Qt
+color schemes from `themes/themes_metadata.json` and writes them under
+`$HOME` (see README for the file list). It runs automatically at compositor
+startup and is re-invoked by the Theme Selector on every theme change. The
+notes below describe the design and the remaining optional refinements.
 
 ## Source of truth
 

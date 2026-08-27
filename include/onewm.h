@@ -6,6 +6,7 @@ int panel_main(int argc, char **argv);
 int desktop_main(int argc, char **argv);
 int filemanager_main(int argc, char **argv);
 int selectors_main(int argc, char **argv);
+int theme_apply_main(int argc, char **argv);
 int compositor_main(int argc, char **argv);
 
 #endif

@@ -67,6 +67,27 @@ windowrule("opacity", "0.95")
   `general.transparency`); reserved hooks for future per-window rules.
 - **Transparency** — unfocused toplevels are dimmed to the configured opacity.
 
+## Toolkit theming (GTK / KDE / Qt)
+
+`onewm` derives native toolkit color schemes from the active OneWM theme and
+applies them automatically at startup (and again whenever you switch themes in
+the Theme Selector). This makes GTK3/4, KDE and Qt applications follow the
+World Machine palette instead of a default theme.
+
+```bash
+onewm theme-apply            # re-apply the current theme to GTK/KDE/Qt now
+onewm theme-apply red        # apply a specific theme by id
+```
+
+Files written (under `$HOME`):
+
+- `~/.config/gtk-3.0/gtk.css` and `~/.config/gtk-4.0/gtk.css`
+- `~/.local/share/color-schemes/onewm-<theme>.colors` + `~/.config/kdeglobals`
+- `~/.config/Kvantum/onewm-<theme>.kvconfig` (best-effort for Qt/Kvantum)
+
+All colors come from `themes/themes_metadata.json` — the same source the WM
+chrome uses. See `docs/THEMING.md`.
+
 Theme colors, panel chrome, file-manager grid, selector thumbnails and desktop
 icon selection boxes all follow the constants extracted from the game's
 decompiled source (see `docs/design-spec.md`).

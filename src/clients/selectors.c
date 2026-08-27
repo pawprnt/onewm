@@ -566,6 +566,12 @@ static void choose(int idx) {
 		char tp[4096]; config_path(tp, sizeof tp, "theme");
 		write_line(tp, themes[idx].id);
 		signal_desktop(SIGUSR2);
+		/* Re-theme native toolkits (GTK/KDE/Qt) for the new theme. */
+		pid_t pid = fork();
+		if (pid == 0) {
+			execl("/proc/self/exe", "onewm", "theme-apply", themes[idx].id, (char *)NULL);
+			_exit(127);
+		}
 	}
 	ctx.running = false;
 }

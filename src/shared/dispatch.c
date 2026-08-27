@@ -25,5 +25,7 @@ int main(int argc, char **argv) {
 		return selectors_main(argc - 1, argv + 1);
 	if (sub && strcmp(sub, "themes") == 0)
 		return selectors_main(argc - 1, argv + 1);
+	if (sub && strcmp(sub, "theme-apply") == 0)
+		return theme_apply_main(argc - 1, argv + 1);
 	return compositor_main(argc, argv);
 }

@@ -48,6 +48,7 @@ executable(
     'src/clients/desktop.c',
     'src/clients/selectors.c',
     'src/clients/filemanager.c',
+    'src/clients/theme_apply.c',
   ],
   layer_shell_server_hdr,
   proto_src,
