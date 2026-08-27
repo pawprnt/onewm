@@ -414,12 +414,15 @@ static void draw_wallpapers(cairo_t *cr, int W, int H) {
 			int ox = cx + (GRID_W - dw) / 2;
 			int oy = cy + 6; /* WALLPAPER_ICON_OFFSET.Y */
 
-			/* shadow at +2,+2 in variant color (game uses gameColor2 for wallpaper shadow) */
+			/* shadow at +2,+2: game draws the thumbnail silhouette in
+			   theme.Background() (gameColor2). Use the image as a mask. */
 			cairo_save(cr);
 			cairo_translate(cr, ox + 2, oy + 2);
 			cairo_scale(cr, s, s);
-			cairo_set_source_surface(cr, img, 0, 0);
-			cairo_paint_with_alpha(cr, 0.4);
+			cairo_set_source_rgba(cr,
+				cur_theme.background[0], cur_theme.background[1],
+				cur_theme.background[2], 0.4);
+			cairo_mask_surface(cr, img, 0, 0);
 			cairo_restore(cr);
 
 			/* main thumbnail in white (game draws wallpaper icons with GameColor.White) */
@@ -693,10 +696,10 @@ static const struct wl_registry_listener registry_listener = {
 	.global = registry_global, .global_remove = registry_remove,
 };
 
-int main(int argc, char **argv) {
-	(void)argc;
-	const char *base = strrchr(argv[0], '/'); base = base ? base + 1 : argv[0];
-	sel_mode = (strstr(base, "wallpaper") || (argc > 1 && strstr(argv[1], "wallpaper")))
+int selectors_main(int argc, char **argv) {
+	(void)argc; (void)argv;
+	const char *sub = getenv("ONEWM_SUBCMD");
+	sel_mode = (sub && strstr(sub, "wallpaper"))
 		? MODE_WALLPAPERS : MODE_THEMES;
 
 	memset(&ctx, 0, sizeof(ctx));

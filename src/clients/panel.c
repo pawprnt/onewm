@@ -224,19 +224,20 @@ static void draw_panel(cairo_t *cr, int W, int H) {
 		double bh = H - 2 - 2 * BUTTON_PAD;
 
 		bool is_active = windows[i].active;
-		/* Colors: active non-minimized = bg on primary, minimized = variant border */
+		/* Matches WindowButton.Draw:
+		   gColor (border):   active        -> primary
+		   gColor2 (inner):   active        -> primary
+		   gameColor (text):  active        -> background
+		   (minimized state is not tracked by the compositor IPC; treat as normal) */
 		float border_r, border_g, border_b;
 		float inner_r, inner_g, inner_b;
 		float text_r, text_g, text_b;
 
+		border_r = primary[0]; border_g = primary[1]; border_b = primary[2];
 		if (is_active) {
-			/* active window: primary border, bg inner, primary text */
-			border_r = primary[0]; border_g = primary[1]; border_b = primary[2];
-			inner_r = bg[0]; inner_g = bg[1]; inner_b = bg[2];
-			text_r = primary[0]; text_g = primary[1]; text_b = primary[2];
+			inner_r = primary[0]; inner_g = primary[1]; inner_b = primary[2];
+			text_r = bg[0]; text_g = bg[1]; text_b = bg[2];
 		} else {
-			/* inactive: variant border, bg inner, primary text */
-			border_r = variant[0]; border_g = variant[1]; border_b = variant[2];
 			inner_r = bg[0]; inner_g = bg[1]; inner_b = bg[2];
 			text_r = primary[0]; text_g = primary[1]; text_b = primary[2];
 		}
@@ -352,7 +353,27 @@ static void pointer_button(void *d, struct wl_pointer *p, uint32_t serial, uint3
 	(void)d; (void)p; (void)serial; (void)t; (void)button;
 	if (state != WL_POINTER_BUTTON_STATE_PRESSED) return;
 	if (ctx.py < 0) return;
-	(void)launch;
+
+	read_window_list();
+	int clock_w = 60;
+	int btn_w = (ctx.width - CLOCK_RIGHT_MARGIN - clock_w - 4 * BUTTON_PAD) / MAX_WINDOWS;
+	if (btn_w < 30) btn_w = 30;
+	if (btn_w > 120) btn_w = 120;
+	double bx = 2 + BUTTON_PAD;
+	for (int i = 0; i < window_count; i++) {
+		double by = 2 + BUTTON_PAD;
+		double bw = btn_w, bh = ctx.height - 2 - 2 * BUTTON_PAD;
+		if (ctx.px >= (int)bx && ctx.px <= (int)(bx + bw) &&
+		    ctx.py >= (int)by && ctx.py <= (int)(by + bh)) {
+			char p2[4096];
+			config_path(p2, sizeof p2, "activate");
+			FILE *f = fopen(p2, "w");
+			if (f) { fprintf(f, "%s\n", windows[i].title); fclose(f); }
+			kill(getppid(), SIGUSR1);
+			break;
+		}
+		bx += btn_w + BUTTON_PAD;
+	}
 }
 static void pointer_axis(void *d, struct wl_pointer *p, uint32_t t, uint32_t axis, wl_fixed_t value) {
 	(void)d; (void)p; (void)t; (void)axis; (void)value;
@@ -456,7 +477,7 @@ static const struct wl_registry_listener registry_listener = {
 	.global = registry_global, .global_remove = registry_remove,
 };
 
-int main(int argc, char **argv) {
+int panel_main(int argc, char **argv) {
 	(void)argc; (void)argv;
 
 	memset(&ctx, 0, sizeof(ctx));
@@ -484,6 +505,27 @@ int main(int argc, char **argv) {
 		}
 	}
 	load_theme(theme_buf);
+
+	/* Offline dump mode: render the panel to a PNG without a compositor. */
+	if (getenv("ONEWM_DUMP")) {
+		char p[4096];
+		config_path(p, sizeof p, "windows");
+		FILE *f = fopen(p, "w");
+		if (f) {
+			fprintf(f, "Terminal\t1\nFile Manager\t0\nWallpaper Selector\t0\nTheme Selector\t0\n");
+			fclose(f);
+		}
+		int W = 1280;
+		const char *ew = getenv("ONEWM_DUMP_W");
+		if (ew) W = atoi(ew);
+		cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, W, PANEL_H);
+		cairo_t *cr = cairo_create(surf);
+		draw_panel(cr, W, PANEL_H);
+		cairo_destroy(cr);
+		cairo_surface_write_to_png(surf, "/tmp/panel_actual.png");
+		cairo_surface_destroy(surf);
+		return 0;
+	}
 
 	/* Signal handler for redraw on compositor window list changes */
 	signal(SIGUSR1, on_sig);

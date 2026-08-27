@@ -347,10 +347,29 @@ static cairo_surface_t *make_label(const char *text) {
 	return s;
 }
 
+/* Fallback icon drawn procedurally when the real asset PNG is unavailable:
+   a white rounded tile that gets tinted to the theme primary by retint(). */
+static cairo_surface_t *make_procedural(int idx) {
+	cairo_surface_t *s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, ICON, ICON);
+	cairo_t *cr = cairo_create(s);
+	cairo_set_source_rgba(cr, 1, 1, 1, 1);
+	double m = 10, r = 12;
+	cairo_move_to(cr, m + r, m);
+	cairo_arc(cr, ICON - m - r, m + r, r, -M_PI_2, 0);
+	cairo_arc(cr, ICON - m - r, ICON - m - r, r, 0, M_PI_2);
+	cairo_arc(cr, m + r, ICON - m - r, r, M_PI_2, M_PI);
+	cairo_arc(cr, m + r, m + r, r, M_PI, M_PI * 1.5);
+	cairo_close_path(cr);
+	cairo_fill(cr);
+	cairo_destroy(cr);
+	return s;
+}
+
 static void load_icons(void) {
 	for (size_t i = 0; i < NICON; i++) {
 		char *p = find_icon(icons[i].rel);
 		if (p) icons[i].base = make_scaled(p, ICON);
+		else icons[i].base = make_procedural((int)i);
 		icons[i].label = make_label(icons[i].name);
 	}
 	retint();
@@ -642,7 +661,7 @@ static void on_sig(int s) {
 	else if (s == SIGUSR2) g_reload_theme = 1;
 }
 
-int main(int argc, char **argv) {
+int desktop_main(int argc, char **argv) {
 	(void)argc; (void)argv;
 
 	memset(&ctx, 0, sizeof(ctx));

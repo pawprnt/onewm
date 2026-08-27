@@ -939,7 +939,7 @@ static bool create_buffers(void) {
     return true;
 }
 
-int main(int argc, char **argv) {
+int boot_main(int argc, char **argv) {
     (void)argc; (void)argv;
 
     memset(&ctx, 0, sizeof(ctx));

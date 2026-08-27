@@ -19,8 +19,8 @@
 #include "wlr-layer-shell-unstable-v1-protocol.h"
 
 /* ── Game-accurate constants (from decompiled OneShotMG) ────────────── */
-#define BROWSER_WIDTH   540
-#define BROWSER_HEIGHT  340
+#define BROWSER_WIDTH   360
+#define BROWSER_HEIGHT  200
 
 #define GRID_ITEM_W     84
 #define GRID_ITEM_H     72
@@ -31,7 +31,7 @@
 #define TEXT_LEFT_M     4
 #define TEXT_H          12
 
-#define WIN_BORDER      2
+#define WIN_BORDER      1
 #define WIN_TOP         26
 #define WIN_BAR_H       20
 #define WIN_BTN_SIZE    16
@@ -420,11 +420,11 @@ static void render(cairo_t *cr) {
 	double wx = ctx.win_x, wy = ctx.win_y;
 
 	/* ── Window outer border (primary) ── */
-	fill_rect(cr, wx, wy, BROWSER_WIDTH + 4, BROWSER_HEIGHT + WIN_TOP + 2,
+	fill_rect(cr, wx, wy, BROWSER_WIDTH + 2 * WIN_BORDER, BROWSER_HEIGHT + WIN_TOP + 2 * WIN_BORDER,
 		th_primary[0], th_primary[1], th_primary[2], 1.0);
 	/* ── Title bar (background) ── */
 	fill_rect(cr, wx + WIN_BORDER, wy + WIN_BORDER,
-		BROWSER_WIDTH, WIN_BAR_H,
+		BROWSER_WIDTH, WIN_TOP,
 		th_bg[0], th_bg[1], th_bg[2], 1.0);
 
 	/* ── Window folder icon in title ── */
@@ -1221,12 +1221,12 @@ static const struct wl_registry_listener registry_listener = {
 };
 
 /* ── Main ──────────────────────────────────────────────────────────── */
-int main(int argc, char **argv) {
+int filemanager_main(int argc, char **argv) {
 	(void)argc;(void)argv;
 
 	memset(&ctx, 0, sizeof(ctx));
-	ctx.W = BROWSER_WIDTH + 4;
-	ctx.H = BROWSER_HEIGHT + WIN_TOP + 2;
+	ctx.W = BROWSER_WIDTH + 2 * WIN_BORDER;
+	ctx.H = BROWSER_HEIGHT + WIN_TOP + 2 * WIN_BORDER;
 	ctx.mx = -1; ctx.my = -1;
 	ctx.sel = -1;
 	ctx.running = true;
@@ -1249,6 +1249,21 @@ int main(int argc, char **argv) {
 	if (!start) start = "/";
 	set_cwd(start);
 	read_dir();
+
+	/* Offline dump mode: render the browser window to a PNG without a compositor. */
+	if (getenv("ONEWM_DUMP")) {
+		int WW = BROWSER_WIDTH + 2 * WIN_BORDER;
+		int WH = BROWSER_HEIGHT + WIN_TOP + 2 * WIN_BORDER;
+		ctx.win_x = 0; ctx.win_y = 0;
+		ctx.W = WW; ctx.H = WH;
+		cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, WW, WH);
+		cairo_t *cr = cairo_create(surf);
+		render(cr);
+		cairo_destroy(cr);
+		cairo_surface_write_to_png(surf, "/tmp/filemanager_actual.png");
+		cairo_surface_destroy(surf);
+		return 0;
+	}
 
 	/* wayland */
 	ctx.dpy = wl_display_connect(NULL);
