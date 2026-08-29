@@ -1,0 +1,5 @@
+[
+  { "file": "getting-started.md", "title": "getting started" },
+  { "file": "themes.md", "title": "themes" },
+  { "file": "config.md", "title": "configuration" }
+]
