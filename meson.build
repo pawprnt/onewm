@@ -1,5 +1,5 @@
 project('onewm', 'c',
-  version: '0.1.0',
+  version: '0.5.0',
   license: 'GPL-3.0-or-later',
   default_options: [
     'c_std=gnu11',
@@ -70,6 +70,7 @@ executable(
     'src/shared/dispatch.c',
     'src/shared/config.c',
     'src/shared/assets.c',
+    'src/shared/helpers.c',
     asset_obj,
     'src/compositor/onewm.c',
     'src/clients/boot.c',

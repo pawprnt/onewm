@@ -13,10 +13,14 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include <wayland-client.h>
 #include "wlr-layer-shell-unstable-v1-protocol.h"
+#include "helpers.h"
+
+enum { FM_FILES = 0, FM_WALLPAPERS, FM_THEMES };
 
 /* ── Game-accurate constants (from decompiled OneShotMG) ────────────── */
 #define BROWSER_WIDTH   360
@@ -58,21 +62,6 @@ static void load_theme_defaults(void) {
 	th_bg[0] = th_bg[1] = th_bg[2] = 0.f;
 }
 
-static char *find_data(const char *rel) {
-	static char path[4096];
-	const char *env = getenv("ONEWM_DATA_DIR");
-	if (env) { snprintf(path, sizeof path, "%s/%s", env, rel); if (access(path, R_OK)==0) return path; }
-	snprintf(path, sizeof path, "data/%s", rel); if (access(path, R_OK)==0) return path;
-	snprintf(path, sizeof path, "/usr/share/onewm/%s", rel); if (access(path, R_OK)==0) return path;
-	return NULL;
-}
-static char *read_file(const char *p, size_t *len) {
-	FILE *f=fopen(p,"rb"); if(!f) return NULL;
-	fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET);
-	char *b=malloc(sz+1); if(!b){fclose(f);return NULL;}
-	if(fread(b,1,sz,f)!=(size_t)sz){fclose(f);free(b);return NULL;}
-	b[sz]='\0'; if(len)*len=sz; fclose(f); return b;
-}
 static const char *brace_close(const char *o){int d=0;for(const char*p=o;*p;p++){if(*p=='{')d++;else if(*p=='}'){d--;if(!d)return p;}}return NULL;}
 static void parse_rgb(const char *b,float*out){int r=-1,g=-1,bv=-1;const char*rj=strstr(b,"\"r\""),*gj=strstr(b,"\"g\""),*bj=strstr(b,"\"b\"");if(rj)sscanf(strchr(rj,':'),":%d",&r);if(gj)sscanf(strchr(gj,':'),":%d",&g);if(bj)sscanf(strchr(bj,':'),":%d",&bv);if(r>=0)out[0]=r/255.f;if(g>=0)out[1]=g/255.f;if(bv>=0)out[2]=bv/255.f;}
 static void load_theme(const char *id) {
@@ -127,8 +116,11 @@ struct fm {
 	int entry_count, entry_cap;
 	int sel;
 	int scroll;
-	int frames_since_click;
+	int mode;
+	long last_click_ms;
 	int click_idx;
+	long last_disc_ms;
+	uint32_t axis_source;
 	bool show_hidden;
 	/* breadcrumbs */
 	struct crumb crumbs[64];
@@ -149,6 +141,102 @@ struct fm {
 	char title_text[512];
 };
 static struct fm ctx;
+
+static long now_ms(void) {
+	struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (long)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+}
+static void read_dir(void); /* fwd */
+
+static void signal_desktop(int sig) {
+	char pidf[512];
+	snprintf(pidf, sizeof pidf, "%s/onewm/desktop.pid",
+	         getenv("HOME") ? getenv("HOME") : "/tmp");
+	FILE *f = fopen(pidf, "r"); if (!f) return;
+	int pid = 0;
+	if (fscanf(f, "%d", &pid) == 1 && pid > 0) kill(pid, sig);
+	fclose(f);
+}
+static void write_wallpaper_config(const char *path) {
+	char cf[512];
+	snprintf(cf, sizeof cf, "%s/onewm/wallpaper",
+	         getenv("HOME") ? getenv("HOME") : "/tmp");
+	FILE *f = fopen(cf, "w"); if (!f) return;
+	fprintf(f, "%s\n", path); fclose(f);
+}
+static void apply_wallpaper(const char *full) {
+	write_wallpaper_config(full);
+	signal_desktop(SIGUSR1);
+	ctx.running = false;
+}
+static void apply_theme(const char *id) {
+	char cf[512];
+	snprintf(cf, sizeof cf, "%s/onewm/theme",
+	         getenv("HOME") ? getenv("HOME") : "/tmp");
+	FILE *f = fopen(cf, "w"); if (f) { fprintf(f, "%s\n", id); fclose(f); }
+	signal_desktop(SIGUSR2);
+	pid_t pid = fork();
+	if (pid == 0) { execl("/proc/self/exe", "onewm", "theme-apply", id, (char *)NULL); _exit(127); }
+	ctx.running = false;
+}
+
+static void read_themes(void) {
+	ctx.entry_count = 0;
+	const char *env = getenv("ONEWM_THEME_DIR");
+	char buf[1200]; const char *path = NULL;
+	if (env) { snprintf(buf, sizeof buf, "%s/themes_metadata.json", env); path = buf; }
+	if (!path) path = find_data("themes/themes_metadata.json");
+	if (!path) return;
+	char *json = read_file(path, NULL);
+	if (!json) return;
+	char *t = strstr(json, "\"themes\"");
+	if (!t) { free(json); return; }
+	int depth = 0, in_str = 0, esc = 0;
+	char *p = t;
+	for (; *p; p++) {
+		if (in_str) { if (*p == '\\') { p++; continue; } if (*p == '"') in_str = 0; continue; }
+		if (*p == '"') { in_str = 1; continue; }
+		if (*p == '[') { depth = 1; break; }
+	}
+	if (depth != 1) { free(json); return; }
+	p++;
+	for (; *p; p++) {
+		char c = *p;
+		if (esc) { esc = 0; continue; }
+		if (c == '\\') { esc = 1; continue; }
+		if (c == '"') { in_str = !in_str; continue; }
+		if (in_str) continue;
+		if (c == '[') depth++;
+		else if (c == ']') { if (depth == 1) break; if (depth > 0) depth--; }
+		else if (c == '{' && depth == 1) {
+			const char *e = brace_close(p);
+			if (!e) break;
+			if (ctx.entry_count >= ctx.entry_cap) {
+				int ncap = ctx.entry_cap ? ctx.entry_cap * 2 : 128;
+				struct file_entry *n = realloc(ctx.entries, sizeof(*n) * ncap);
+				if (!n) { p = (char *)e; continue; }
+				ctx.entries = n; ctx.entry_cap = ncap;
+			}
+			char *obj = strndup(p, (size_t)(e - p + 1));
+			char *n = strstr(obj, "\"id\"");
+			if (n) {
+				n = strchr(n + 4, '"');
+				if (n) {
+					n++;
+					char *en = strchr(n, '"');
+					int l = en ? (int)(en - n) : 0;
+					if (l > 255) l = 255;
+					struct file_entry *fe = &ctx.entries[ctx.entry_count++];
+					snprintf(fe->name, sizeof fe->name, "%.*s", l, n);
+					fe->type = FT_FILE; fe->size = 0;
+				}
+			}
+			free(obj);
+			p = (char *)e;
+		}
+	}
+	free(json);
+}
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
 static void config_path(char *out, size_t n, const char *name) {
@@ -174,8 +262,13 @@ static void set_cwd(const char *path) {
 	if (l > 1 && ctx.cwd[l-1] == '/') ctx.cwd[--l] = '\0';
 	ctx.sel = -1;
 	ctx.scroll = 0;
-	ctx.frames_since_click = DOUBLECLICK_F;
+	ctx.last_click_ms = -1;
 	ctx.delete_pending = false;
+	if (ctx.mode == FM_THEMES) {
+		ctx.crumb_count = 0;
+		read_themes();
+		return;
+	}
 	build_title();
 	/* build crumbs */
 	ctx.crumb_count = 0;
@@ -213,8 +306,11 @@ static void read_dir(void) {
 			if (!ctx.show_hidden) continue;
 		}
 		if (ctx.entry_count >= ctx.entry_cap) {
-			ctx.entry_cap = ctx.entry_cap ? ctx.entry_cap * 2 : 128;
-			ctx.entries = realloc(ctx.entries, sizeof(*ctx.entries) * ctx.entry_cap);
+			int ncap = ctx.entry_cap ? ctx.entry_cap * 2 : 128;
+			struct file_entry *n = realloc(ctx.entries, sizeof(*ctx.entries) * ncap);
+			if (!n) break;
+			ctx.entries = n;
+			ctx.entry_cap = ncap;
 		}
 		struct file_entry *e = &ctx.entries[ctx.entry_count];
 		strncpy(e->name, de->d_name, 255);
@@ -726,6 +822,22 @@ static bool create_buffers(void) {
 	return true;
 }
 
+/* Confine the surface's input + opaque region to the drawn window so the
+   rest of the (transparent) fullscreen surface is click-through and lets the
+   desktop behind show. */
+static void update_regions(void) {
+	if (!ctx.compositor) return;
+	int wx = (int)ctx.win_x, wy = (int)ctx.win_y;
+	int ww = BROWSER_WIDTH + 2 * WIN_BORDER;
+	int wh = BROWSER_HEIGHT + WIN_TOP + 2 * WIN_BORDER;
+	struct wl_region *r = wl_compositor_create_region(ctx.compositor);
+	if (!r) return;
+	wl_region_add(r, wx, wy, ww, wh);
+	wl_surface_set_input_region(ctx.surface, r);
+	wl_surface_set_opaque_region(ctx.surface, r);
+	wl_region_destroy(r);
+}
+
 static void do_redraw(void) {
 	if (!ctx.configured || !ctx.buffers[0]) return;
 	int idx = ctx.buf_idx;
@@ -745,6 +857,7 @@ static void do_redraw(void) {
 	cairo_surface_flush(shm_s);
 	cairo_surface_destroy(shm_s);
 	wl_surface_attach(ctx.surface, ctx.buffers[idx], 0, 0);
+	update_regions();
 	wl_surface_damage_buffer(ctx.surface, 0, 0, INT32_MAX, INT32_MAX);
 	wl_surface_commit(ctx.surface);
 	ctx.buf_idx = 1 - ctx.buf_idx;
@@ -768,7 +881,6 @@ static int entry_at_pos(double px, double py) {
 
 static void navigate_to(const char *path) {
 	set_cwd(path);
-	read_dir();
 }
 
 static void navigate_up(void) {
@@ -786,18 +898,25 @@ static void navigate_up(void) {
 static void open_entry(int idx) {
 	if (idx < 0 || idx >= ctx.entry_count) return;
 	struct file_entry *e = &ctx.entries[idx];
+	if (ctx.mode == FM_THEMES) { apply_theme(e->name); return; }
 	if (e->type == FT_FOLDER) {
 		char new_path[4096];
 		snprintf(new_path, sizeof new_path, "%s/%s", ctx.cwd, e->name);
 		navigate_to(new_path);
-	} else {
+		return;
+	}
+	if (ctx.mode == FM_WALLPAPERS) {
 		char full[8192];
 		snprintf(full, sizeof full, "%s/%s", ctx.cwd, e->name);
-		pid_t pid = fork();
-		if (pid == 0) {
-			execlp("xdg-open", "xdg-open", full, (char *)NULL);
-			_exit(127);
-		}
+		apply_wallpaper(full);
+		return;
+	}
+	char full[8192];
+	snprintf(full, sizeof full, "%s/%s", ctx.cwd, e->name);
+	pid_t pid = fork();
+	if (pid == 0) {
+		execlp("xdg-open", "xdg-open", full, (char *)NULL);
+		_exit(127);
 	}
 }
 
@@ -811,13 +930,15 @@ static void delete_entry(const char *name) {
 		if (pid == 0) {
 			execlp("rm", "rm", "-rf", path, (char *)NULL);
 			_exit(127);
+		} else if (pid > 0) {
+			int stt; waitpid(pid, &stt, 0);
 		}
 	} else {
 		unlink(path);
 	}
 	/* refresh */
 	ctx.sel = -1;
-	read_dir();
+	set_cwd(ctx.cwd);
 }
 
 static void handle_click(double px, double py) {
@@ -865,7 +986,7 @@ static void handle_click(double px, double py) {
 	/* ── Breadcrumb area ── */
 	double bx = wx + WIN_BORDER;
 	double by = wy + WIN_TOP;
-	if (py >= by && py < by + BREADCRUMB_H) {
+	if (ctx.mode != FM_THEMES && py >= by && py < by + BREADCRUMB_H) {
 		double up_x = bx + 4, up_y2 = by + (BREADCRUMB_H - 16)/2;
 		if (px >= up_x && px <= up_x + 16 && py >= up_y2 && py <= up_y2 + 16) {
 			navigate_up();
@@ -890,7 +1011,7 @@ static void handle_click(double px, double py) {
 	}
 
 	/* ── Trash button ── */
-	if (ctx.sel >= 0 && ctx.sel < ctx.entry_count) {
+	if (ctx.mode == FM_FILES && ctx.sel >= 0 && ctx.sel < ctx.entry_count) {
 		double bx2 = wx + WIN_BORDER;
 		double by2 = wy + WIN_TOP;
 		double del_x = bx2 + BROWSER_WIDTH - 20;
@@ -936,11 +1057,13 @@ static void handle_click(double px, double py) {
 	/* ── Grid click ── */
 	int idx = entry_at_pos(px, py);
 	if (idx >= 0) {
-		if (ctx.frames_since_click < DOUBLECLICK_F && idx == ctx.click_idx) {
+		long now = now_ms();
+		if (idx == ctx.click_idx && (now - ctx.last_click_ms) < 400) {
 			open_entry(idx);
-			ctx.frames_since_click = DOUBLECLICK_F;
+			ctx.last_click_ms = -1;
+			ctx.click_idx = -1;
 		} else {
-			ctx.frames_since_click = 0;
+			ctx.last_click_ms = now;
 			ctx.click_idx = idx;
 			ctx.sel = idx;
 		}
@@ -965,7 +1088,7 @@ static void update_hover(double px, double py) {
 	double up_x = bx + 4, up_y = by + (BREADCRUMB_H - 16)/2;
 	ctx.hover_up = (px >= up_x && px <= up_x + 16 && py >= up_y && py <= up_y + 16);
 	double del_x = bx + BROWSER_WIDTH - 20;
-	ctx.hover_del = (px >= del_x && px <= del_x + 16 && py >= up_y && py <= up_y + 16);
+	ctx.hover_del = (ctx.mode == FM_FILES && px >= del_x && px <= del_x + 16 && py >= up_y && py <= up_y + 16);
 
 	ctx.hover_crumb = -1;
 	if (py >= by && py < by + BREADCRUMB_H) {
@@ -1090,6 +1213,8 @@ static void pointer_button(void *d, struct wl_pointer *p, uint32_t s,
 }
 static void pointer_axis(void *d, struct wl_pointer *p, uint32_t t, uint32_t axis, wl_fixed_t value) {
 	(void)d;(void)p;(void)t;(void)axis;
+	/* Wheel notches are handled by axis_discrete; only smooth sources scroll here. */
+	if (ctx.axis_source == WL_POINTER_AXIS_SOURCE_WHEEL) return;
 	double delta = wl_fixed_to_double(value);
 	int steps = (int)(fabs(delta) / 120.0);
 	if (steps < 1) steps = 1;
@@ -1099,7 +1224,7 @@ static void pointer_axis(void *d, struct wl_pointer *p, uint32_t t, uint32_t axi
 	do_redraw();
 }
 static void pointer_frame(void *d, struct wl_pointer *p) { (void)d;(void)p; }
-static void pointer_axis_source(void *d, struct wl_pointer *p, uint32_t s) { (void)d;(void)p;(void)s; }
+static void pointer_axis_source(void *d, struct wl_pointer *p, uint32_t s) { (void)d;(void)p; ctx.axis_source = s; }
 static void pointer_axis_stop(void *d, struct wl_pointer *p, uint32_t t, uint32_t a) { (void)d;(void)p;(void)t;(void)a; }
 static void pointer_axis_discrete(void *d, struct wl_pointer *p, uint32_t a, int32_t s) {
 	(void)d;(void)p;(void)a;
@@ -1150,7 +1275,7 @@ static void keyboard_key(void *d, struct wl_keyboard *k, uint32_t serial, uint32
 		break;
 	case 35: /* H = toggle hidden */
 		ctx.show_hidden = !ctx.show_hidden;
-		read_dir();
+		set_cwd(ctx.cwd);
 		do_redraw();
 		break;
 	}
@@ -1186,9 +1311,11 @@ static void layer_surface_configure(void *d, struct zwlr_layer_surface_v1 *ls,
 		uint32_t serial, uint32_t w, uint32_t h) {
 	(void)d;
 	zwlr_layer_surface_v1_ack_configure(ls, serial);
+	int oldW = ctx.W, oldH = ctx.H;
 	if ((int32_t)w > 0) ctx.W = w;
 	if ((int32_t)h > 0) ctx.H = h;
-	bool need = (ctx.buffers[0] == NULL) || (ctx.configured && w > 0 && h > 0);
+	bool need = (ctx.buffers[0] == NULL) ||
+	             (ctx.configured && w > 0 && h > 0 && (w != (uint32_t)oldW || h != (uint32_t)oldH));
 	if (need) {
 		for (int i = 0; i < 2; i++) {
 			if (ctx.map[i]) { munmap(ctx.map[i], ctx.map_sz[i]); ctx.map[i] = NULL; }
@@ -1234,12 +1361,10 @@ int filemanager_main(int argc, char **argv) {
 	(void)argc;(void)argv;
 
 	memset(&ctx, 0, sizeof(ctx));
-	ctx.W = BROWSER_WIDTH + 2 * WIN_BORDER;
-	ctx.H = BROWSER_HEIGHT + WIN_TOP + 2 * WIN_BORDER;
 	ctx.mx = -1; ctx.my = -1;
 	ctx.sel = -1;
 	ctx.running = true;
-	ctx.frames_since_click = DOUBLECLICK_F;
+	ctx.last_click_ms = -1;
 	ctx.win_x = 100; ctx.win_y = 100;
 
 	/* theme */
@@ -1253,11 +1378,31 @@ int filemanager_main(int argc, char **argv) {
 	}
 	load_theme(theme_buf);
 
-	/* initial path */
-	const char *start = (argc > 1) ? argv[1] : getenv("HOME");
+	/* initial path / mode */
+	int mode = FM_FILES;
+	const char *start = NULL;
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--wallpapers") == 0) mode = FM_WALLPAPERS;
+		else if (strcmp(argv[i], "--themes") == 0) mode = FM_THEMES;
+		else if (argv[i][0] != '-' && !start) start = argv[i];
+	}
+	ctx.mode = mode;
+	if (mode == FM_WALLPAPERS) {
+		const char *env = getenv("ONEWM_WALLPAPER_DIR");
+		char tmp[4096]; const char *d = NULL;
+		if (env) { snprintf(tmp, sizeof tmp, "%s/wallpapers", env); d = tmp; }
+		else d = find_data("wallpapers");
+		char ab[4096];
+		if (d && realpath(d, ab)) d = ab;
+		if (!d) d = getenv("HOME");
+		if (!d) d = "/";
+		start = d;
+	} else if (mode == FM_THEMES) {
+		start = "themes";
+	}
+	if (!start) start = getenv("HOME");
 	if (!start) start = "/";
 	set_cwd(start);
-	read_dir();
 
 	/* Offline dump mode: render the browser window to a PNG without a compositor. */
 	if (getenv("ONEWM_DUMP")) {
@@ -1290,8 +1435,10 @@ int filemanager_main(int argc, char **argv) {
 		ZWLR_LAYER_SHELL_V1_LAYER_TOP, "onewm-filemanager");
 	zwlr_layer_surface_v1_set_keyboard_interactivity(ctx.layer_surface,
 		ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
-	zwlr_layer_surface_v1_set_anchor(ctx.layer_surface, 0);
-	zwlr_layer_surface_v1_set_size(ctx.layer_surface, ctx.W, ctx.H);
+	zwlr_layer_surface_v1_set_anchor(ctx.layer_surface,
+		ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
+		ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+	zwlr_layer_surface_v1_set_size(ctx.layer_surface, 0, 0);
 	zwlr_layer_surface_v1_set_exclusive_zone(ctx.layer_surface, -1);
 	zwlr_layer_surface_v1_add_listener(ctx.layer_surface, &layer_surface_listener, NULL);
 	wl_surface_commit(ctx.surface);

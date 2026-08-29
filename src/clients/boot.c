@@ -20,9 +20,26 @@
 #include <pango/pangocairo.h>
 #include <wayland-client.h>
 #include "wlr-layer-shell-unstable-v1-protocol.h"
+#include "helpers.h"
 
-/* Version string: v1.yy.mm.dd.hh baked in at compile time via __DATE__/__TIME__. */
+/* Version string shown during boot. Read verbatim from data/boot/VERSION
+   (embedded), falling back to the build date if the file is missing. */
 static void boot_version_string(char *out, size_t n) {
+    const char *p = find_data("boot/VERSION");
+    char *raw = p ? read_file(p, NULL) : NULL;
+    if (raw) {
+        size_t L = strlen(raw);
+        while (L > 0 && (raw[L-1] == '\n' || raw[L-1] == '\r' ||
+                         raw[L-1] == ' '  || raw[L-1] == '\t')) raw[--L] = '\0';
+        if (raw[0]) {
+            const char *v = (raw[0] == 'v' || raw[0] == 'V') ? raw + 1 : raw;
+            snprintf(out, n, "v%s", v);
+            free(raw);
+            return;
+        }
+        free(raw);
+    }
+    /* Fallback: build date (v1.yy.mm.dd.hh). */
     static const char *mons[] = {"Jan","Feb","Mar","Apr","May","Jun",
                                  "Jul","Aug","Sep","Oct","Nov","Dec"};
     char mon[4];
@@ -151,34 +168,6 @@ static double now_sec(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec + ts.tv_nsec / 1e9;
-}
-
-static char *find_data(const char *rel) {
-    static char path[4096];
-    const char *env = getenv("ONEWM_DATA_DIR");
-    if (env) {
-        snprintf(path, sizeof(path), "%s/%s", env, rel);
-        if (access(path, R_OK) == 0) return path;
-    }
-    snprintf(path, sizeof(path), "data/%s", rel);
-    if (access(path, R_OK) == 0) return path;
-    snprintf(path, sizeof(path), "/usr/share/onewm/%s", rel);
-    if (access(path, R_OK) == 0) return path;
-    return NULL;
-}
-
-static char *read_file(const char *path, size_t *len) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *buf = malloc(sz + 1);
-    if (fread(buf, 1, sz, f) != (size_t)sz) { fclose(f); free(buf); return NULL; }
-    buf[sz] = '\0';
-    fclose(f);
-    if (len) *len = sz;
-    return buf;
 }
 
 /* Read a file into an array of strdup'd lines (no trailing empty lines). */
@@ -677,11 +666,11 @@ static void draw_frame(cairo_t *cr) {
         /* During a load phase the game shows the current item on the final
            console line (postText[count-1] = NextSoundToLoad()); replace the last
            line with it so we never render a growing list. */
+        char disp[256];
         if (cur_kind != 0 && cur_idx >= 0 && n > 0) {
             const char *name = (cur_kind == KIND_SOUND)
                                   ? scene.sound_names[cur_idx]
                                   : scene.tex_names[cur_idx];
-            char disp[256];
             if (cur_kind == KIND_TEX) {
                 const char *p = name;
                 if (strncmp(p, "the_world_machine/", 18) == 0) p += 18;

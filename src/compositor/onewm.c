@@ -32,6 +32,7 @@
 #include <fcntl.h>
 #include "config.h"
 #include "onewm.h"
+#include "helpers.h"
 
 /* For brevity's sake, struct members are annotated where they are used. */
 enum tinywl_cursor_mode {
@@ -102,24 +103,6 @@ struct tinywl_server {
  * Chrome is drawn white/grayscale and multiplied by the theme color at render
  * time. The boot client (onewm-boot) is a separate process and stays purple. */
 
-static char *find_data(const char *rel) {
-	static char path[4096];
-	const char *env = getenv("ONEWM_DATA_DIR");
-	if (env) {
-		snprintf(path, sizeof(path), "%s/%s", env, rel);
-		if (access(path, R_OK) == 0) return path;
-	}
-	snprintf(path, sizeof(path), "data/%s", rel);
-	if (access(path, R_OK) == 0) return path;
-	snprintf(path, sizeof(path), "themes/%s", rel);
-	if (access(path, R_OK) == 0) return path;
-	snprintf(path, sizeof(path), "../themes/%s", rel);
-	if (access(path, R_OK) == 0) return path;
-	snprintf(path, sizeof(path), "/usr/share/onewm/%s", rel);
-	if (access(path, R_OK) == 0) return path;
-	return NULL;
-}
-
 /* Resolve a usable ONEWM_DATA_DIR so auto-spawned clients (boot, panel,
    desktop, ...) inherit it. config.c only sets it from general.data_dir, so
    when that is unset we fall back to the repo's data/ dir or the install
@@ -148,21 +131,6 @@ static void resolve_data_dir(void) {
 			return;
 		}
 	}
-}
-
-static char *read_file(const char *path, size_t *len) {
-	FILE *f = fopen(path, "rb");
-	if (!f) return NULL;
-	fseek(f, 0, SEEK_END);
-	long sz = ftell(f);
-	fseek(f, 0, SEEK_SET);
-	char *buf = malloc(sz + 1);
-	if (!buf) { fclose(f); return NULL; }
-	if (fread(buf, 1, sz, f) != (size_t)sz) { fclose(f); free(buf); return NULL; }
-	buf[sz] = '\0';
-	fclose(f);
-	if (len) *len = sz;
-	return buf;
 }
 
 static void rgb_to_hsl(float r, float g, float b, float *h, float *s, float *l) {
@@ -1623,7 +1591,6 @@ int compositor_main(int argc, char *argv[]) {
 	wlr_log(WLR_INFO, "Running Wayland compositor on WAYLAND_DISPLAY=%s",
 			socket);
 	wl_display_run(server.wl_display);
-
 
 	/* Once wl_display_run returns, we destroy all clients then shut down the
 	 * server. */

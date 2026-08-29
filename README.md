@@ -22,8 +22,17 @@ individual layer-shell clients (used internally and for previewing):
 | `onewm panel`       | Taskbar (window list, clock, click-to-focus).               |
 | `onewm desktop`     | Desktop icons + wallpaper.                                  |
 | `onewm filemanager` | The World Machine "file browser" window.                    |
-| `onewm wallpapers`  | Wallpaper selector.                                         |
-| `onewm themes`      | Theme selector.                                             |
+| `onewm filemanager --wallpapers` | Wallpaper manager — reuses the file browser; pick a wallpaper to apply it live. |
+| `onewm filemanager --themes`    | Theme manager — reuses the file browser; pick a theme to apply it live. |
+| `onewm wallpapers`  | (legacy) standalone wallpaper selector.                     |
+| `onewm themes`      | (legacy) standalone theme selector.                         |
+
+The in-game **Wallpapers** and **Themes** desktop icons launch
+`onewm filemanager --wallpapers` / `--themes`. The file manager doubles as the
+wallpaper and theme picker: choosing an entry writes the selection to
+`~/.config/onewm/wallpaper` (or `theme`) and signals the desktop to re-apply it
+live. The standalone `onewm wallpapers` / `onewm themes` selectors remain as an
+alternative.
 
 Set `ONEWM_NO_AUTOSPAWN=1` to start only the compositor.
 

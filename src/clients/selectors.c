@@ -18,6 +18,7 @@
 #include <pango/pangocairo.h>
 #include <wayland-client.h>
 #include "wlr-layer-shell-unstable-v1-protocol.h"
+#include "helpers.h"
 
 enum mode { MODE_WALLPAPERS, MODE_THEMES };
 static enum mode sel_mode;
@@ -142,30 +143,6 @@ static void signal_desktop(int sig) {
 static void write_line_to_config(const char *v) {
 	char p[4096]; config_path(p, sizeof p, "wallpaper");
 	write_line(p, v);
-}
-
-static char *find_data(const char *rel) {
-	static char path[4096];
-
-	if (strncmp(rel, "wallpapers/", 10) == 0) {
-		const char *wd = getenv("ONEWM_WALLPAPER_DIR");
-		if (wd) {
-			snprintf(path, sizeof(path), "%s/%s", wd, rel + 10);
-			if (access(path, R_OK) == 0)
-				return path;
-		}
-	}
-
-	const char *env = getenv("ONEWM_DATA_DIR");
-	if (env) {
-		snprintf(path, sizeof(path), "%s/%s", env, rel);
-		if (access(path, R_OK) == 0) return path;
-	}
-	snprintf(path, sizeof(path), "data/%s", rel);
-	if (access(path, R_OK) == 0) return path;
-	snprintf(path, sizeof(path), "/usr/share/onewm/%s", rel);
-	if (access(path, R_OK) == 0) return path;
-	return NULL;
 }
 
 /* --- wallpaper list --- */

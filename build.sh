@@ -10,9 +10,18 @@
 # Adjust the wlroots package name for other distros if needed.
 set -e
 
+# ---- 0. parse arguments ----
+NO_INSTALL=0
+for a in "$@"; do
+	case "$a" in
+		--no-install) NO_INSTALL=1 ;;
+		*) echo "Unknown argument: $a" >&2; exit 1 ;;
+	esac
+done
+
 # ---- 1. detect package manager ----
 PM=""
-elif   command -v pacman      >/dev/null 2>&1; then PM=pacman
+if   command -v pacman      >/dev/null 2>&1; then PM=pacman
 elif command -v apt-get       >/dev/null 2>&1; then PM=apt
 elif command -v dnf           >/dev/null 2>&1; then PM=dnf
 elif command -v zypper        >/dev/null 2>&1; then PM=zypper
@@ -25,6 +34,7 @@ fi
 echo "Detected package manager: $PM"
 
 # ---- 2. install + upgrade build dependencies ----
+if [ "$NO_INSTALL" -eq 0 ]; then
 # meson.build dependency()/find_program() needs:
 #   wlroots-0.20, wayland-server, wayland-client, xkbcommon, cairo,
 #   pangocairo, fontconfig, zlib, wayland-scanner, wayland-protocols,
@@ -68,6 +78,9 @@ case "$PM" in
 		sudo apk add $DEPS
 		;;
 esac
+else
+	echo "Skipping dependency install (--no-install)."
+fi
 
 # ---- 3. meson setup (only if not already configured) ----
 if [ ! -f build/build.ninja ]; then

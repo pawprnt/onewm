@@ -17,6 +17,7 @@
 #include <pango/pangocairo.h>
 #include <wayland-client.h>
 #include "wlr-layer-shell-unstable-v1-protocol.h"
+#include "helpers.h"
 
 #define ICON 64
 /* The game lays out desktop icons in an internal coordinate space (icon 32px,
@@ -52,8 +53,8 @@ static struct icon icons[] = {
 	{ "Firefox",    "apps/firefox-3.0.png",                   "firefox",        0, 0, NULL },
 	{ "Alacritty",  "apps/Alacritty.png",                     "alacritty",      0, 0, NULL },
 	{ "Files",      "places/folder-visiting.png",             "onewm filemanager", 0, 0, NULL },
-	{ "Wallpapers", "apps/preferences-desktop-wallpaper.png", "onewm wallpapers", 0, 0, NULL },
-	{ "Themes",     "apps/preferences-desktop-theme.png",     "onewm themes",   0, 0, NULL },
+	{ "Wallpapers", "apps/preferences-desktop-wallpaper.png", "onewm filemanager --wallpapers", 0, 0, NULL },
+	{ "Themes",     "apps/preferences-desktop-theme.png",     "onewm filemanager --themes",   0, 0, NULL },
 };
 #define NICON (sizeof(icons) / sizeof(icons[0]))
 
@@ -106,32 +107,6 @@ static void read_line(const char *path, char *buf, size_t n) {
 	fclose(f);
 }
 
-static char *find_data(const char *rel) {
-	static char path[4096];
-
-	/* Allow an external wallpaper directory (general.wallpaper_dir) to supply
-	   additional/default wallpapers, taking precedence over embedded ones. */
-	if (strncmp(rel, "wallpapers/", 10) == 0) {
-		const char *wd = getenv("ONEWM_WALLPAPER_DIR");
-		if (wd) {
-			snprintf(path, sizeof(path), "%s/%s", wd, rel + 10);
-			if (access(path, R_OK) == 0)
-				return path;
-		}
-	}
-
-	const char *env = getenv("ONEWM_DATA_DIR");
-	if (env) {
-		snprintf(path, sizeof(path), "%s/%s", env, rel);
-		if (access(path, R_OK) == 0) return path;
-	}
-	snprintf(path, sizeof(path), "data/%s", rel);
-	if (access(path, R_OK) == 0) return path;
-	snprintf(path, sizeof(path), "/usr/share/onewm/%s", rel);
-	if (access(path, R_OK) == 0) return path;
-	return NULL;
-}
-
 static char *find_icon(const char *rel) {
 	static char path[4096];
 	const char *dir = getenv("ONEWM_ICON_DIR");
@@ -139,20 +114,6 @@ static char *find_icon(const char *rel) {
 	snprintf(path, sizeof(path), "%s/%s", dir, rel);
 	if (access(path, R_OK) == 0) return path;
 	return NULL;
-}
-
-static char *read_file(const char *path, size_t *len) {
-	FILE *f = fopen(path, "rb");
-	if (!f) return NULL;
-	fseek(f, 0, SEEK_END);
-	long sz = ftell(f);
-	fseek(f, 0, SEEK_SET);
-	char *buf = malloc(sz + 1);
-	if (fread(buf, 1, sz, f) != (size_t)sz) { fclose(f); free(buf); return NULL; }
-	buf[sz] = '\0';
-	fclose(f);
-	if (len) *len = sz;
-	return buf;
 }
 
 static const char *match_brace_close(const char *s) {

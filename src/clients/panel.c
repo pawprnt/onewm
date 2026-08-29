@@ -17,6 +17,7 @@
 #include <pango/pangocairo.h>
 #include <wayland-client.h>
 #include "wlr-layer-shell-unstable-v1-protocol.h"
+#include "helpers.h"
 
 /* Game constants: TWMTaskbar.TASKBAR_HEIGHT = 30 */
 #define PANEL_H 30
@@ -64,35 +65,6 @@ static void config_path(char *out, size_t n, const char *name) {
 	const char *home = getenv("HOME");
 	if (!home) home = "/tmp";
 	snprintf(out, n, "%s/.config/onewm/%s", home, name);
-}
-
-static char *find_data(const char *rel) {
-	static char path[4096];
-	const char *env = getenv("ONEWM_DATA_DIR");
-	if (env) {
-		snprintf(path, sizeof(path), "%s/%s", env, rel);
-		if (access(path, R_OK) == 0) return path;
-	}
-	snprintf(path, sizeof(path), "data/%s", rel);
-	if (access(path, R_OK) == 0) return path;
-	snprintf(path, sizeof(path), "/usr/share/onewm/%s", rel);
-	if (access(path, R_OK) == 0) return path;
-	return NULL;
-}
-
-static char *read_file(const char *path, size_t *len) {
-	FILE *f = fopen(path, "rb");
-	if (!f) return NULL;
-	fseek(f, 0, SEEK_END);
-	long sz = ftell(f);
-	fseek(f, 0, SEEK_SET);
-	char *buf = malloc(sz + 1);
-	if (!buf) { fclose(f); return NULL; }
-	if (fread(buf, 1, sz, f) != (size_t)sz) { fclose(f); free(buf); return NULL; }
-	buf[sz] = '\0';
-	fclose(f);
-	if (len) *len = sz;
-	return buf;
 }
 
 static const char *match_brace_close(const char *open) {
@@ -173,10 +145,10 @@ static void read_window_list(void) {
 		char *tab = strchr(line, '\t');
 		if (tab) {
 			*tab = '\0';
-			strncpy(windows[window_count].title, line, sizeof(windows[window_count].title) - 1);
+			snprintf(windows[window_count].title, sizeof(windows[window_count].title), "%s", line);
 			windows[window_count].active = atoi(tab + 1);
 		} else {
-			strncpy(windows[window_count].title, line, sizeof(windows[window_count].title) - 1);
+			snprintf(windows[window_count].title, sizeof(windows[window_count].title), "%s", line);
 			windows[window_count].active = 0;
 		}
 		window_count++;
@@ -279,7 +251,8 @@ static void draw_panel(cairo_t *cr, int W, int H) {
 		time_t now = time(NULL);
 		struct tm *tm = localtime(&now);
 		char clock[16];
-		strftime(clock, sizeof clock, "%I:%M %p", tm);
+		if (!tm) { clock[0] = '\0'; }
+		else strftime(clock, sizeof clock, "%I:%M %p", tm);
 		/* strip leading zero */
 		if (clock[0] == '0') memmove(clock, clock + 1, strlen(clock));
 

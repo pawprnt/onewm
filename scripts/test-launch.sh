@@ -3,10 +3,12 @@
 # Automatically detects whether the parent session is Wayland or X11 and picks
 # the matching wlroots backend (WLR_BACKENDS=wayland | x11).
 #
-# Usage: scripts/test-launch.sh [--no-build] [--no-replace] [--theme]
+# Usage: scripts/test-launch.sh [--build] [--no-build] [--no-install] [--no-replace] [--theme]
 #                                [--workspace N] [--log [FILE]] [--data DIR]
 #
-#   --no-build    skip ninja (assume build/ is current)
+#   --build       run ./build.sh (install deps + full configure + compile)
+#   --no-build    skip building entirely (assume build/ is current)
+#   --no-install  passed to ./build.sh: skip installing build dependencies
 #   --no-replace  don't kill a previous nested instance first
 #   --theme       actually apply GTK/KDE/Qt theming (default: ONEWM_NO_THEME_APPLY=1)
 #   --workspace N jump to workspace N first (Hyprland, Wayland only)
@@ -18,13 +20,17 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG=/tmp/onewm-test.log
 WS=3
 NO_BUILD=0
+RUN_BUILD_SH=0
+NO_INSTALL=0
 NO_REPLACE=0
 APPLY_THEME=0
 DATA_DIR=""
 
 while [ $# -gt 0 ]; do
 	case "$1" in
+		--build)      RUN_BUILD_SH=1; NO_BUILD=0 ;;
 		--no-build)   NO_BUILD=1 ;;
+		--no-install) NO_INSTALL=1 ;;
 		--no-replace) NO_REPLACE=1 ;;
 		--theme)      APPLY_THEME=1 ;;
 		--workspace)  shift; WS="$1" ;;
@@ -37,14 +43,24 @@ done
 
 cd "$REPO_DIR"
 
-# Build (auto-create the build dir on first run).
+# Build.
+#   default     -> incremental ninja (auto meson setup on first run)
+#   --no-build  -> skip building entirely
+#   --build     -> run ./build.sh (install deps + full configure + compile)
 if [ "$NO_BUILD" -eq 0 ]; then
-	if [ ! -f build/build.ninja ]; then
-		echo "meson setup build"
-		meson setup build
+	if [ "$RUN_BUILD_SH" -eq 1 ]; then
+		echo "Running build.sh"
+		BUILD_ARGS=""
+		[ "$NO_INSTALL" -eq 1 ] && BUILD_ARGS="--no-install"
+		./build.sh $BUILD_ARGS
+	else
+		if [ ! -f build/build.ninja ]; then
+			echo "meson setup build"
+			meson setup build
+		fi
+		ninja -C build
+		echo "Build OK"
 	fi
-	ninja -C build
-	echo "Build OK"
 fi
 
 # Detect the host session type.
